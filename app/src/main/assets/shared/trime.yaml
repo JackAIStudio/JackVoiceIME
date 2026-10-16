@@ -971,6 +971,9 @@ preset_keys:
   Sync: {label: 同步, send: FUNCTION, command: apply, option: "SYNC_USER_DATA"} #用户资料同步
   updateConfig: {label: 更新配置, send: FUNCTION, command: apply, option: "UPDATE_CONFIG"} #更新配置文件
   RepeatCommit: { label: 重复,  command: commit, option: "%1$s" } #重复输入刚上屏的内容
+  # 语音面板：整块键盘区切换成「点击说话」的语音面板（对标 Typeless）
+  Voice: {label: 语音, command: voice_panel}
+  VoiceBack: {label: 键盘, command: voice_back}
 
 preset_keyboards:
   default:
@@ -1212,9 +1215,10 @@ preset_keyboards:
     - {click: Mode_switch, long_click: Menu, width: 15}
     - {click: Keyboard_symbols, long_click: Keyboard_number}
     - {click: ',', long_click: '<'}
-    - {click: space, width: 30}
+    - {click: space, width: 20}
     - {click: '.', long_click: '>'}
     - {click: '/', long_click: '?'}
+    - {click: Voice, width: 10}
     - {click: Return, composing: Return1, long_click: CommitComment, width: 15}
   us_intl:
     name: 美式國際

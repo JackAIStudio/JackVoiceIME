@@ -27,6 +27,7 @@ import com.osfans.trime.ime.core.TrimeInputMethodService
 import com.osfans.trime.ime.dialog.EnabledSchemaPickerDialog
 import com.osfans.trime.ime.switches.SwitchOptionWindow
 import com.osfans.trime.ime.symbol.LiquidWindow
+import com.osfans.trime.ime.voice.VoiceWindow
 import com.osfans.trime.ime.window.BoardWindowManager
 import com.osfans.trime.ui.main.settings.ColorPickerDialog
 import com.osfans.trime.ui.main.settings.SoundEffectPickerDialog
@@ -55,6 +56,7 @@ class CommonKeyboardActionListener(override val di: DI) : DIAware {
     private val windowManager: BoardWindowManager by instance()
     private val keyboardWindow: KeyboardWindow by instance()
     private val liquidWindow: LiquidWindow by instance()
+    private val voiceWindow: VoiceWindow by instance()
 
     private val prefs = AppPrefs.defaultInstance()
 
@@ -180,6 +182,8 @@ class CommonKeyboardActionListener(override val di: DI) : DIAware {
 
                 when (action.command) {
                     "liquid_keyboard" -> handleLiquidKeyboard(arg)
+                    "voice_panel" -> windowManager.attachWindow(voiceWindow)
+                    "voice_back" -> windowManager.attachWindow(keyboardWindow)
                     "menu_keyboard" -> windowManager.attachWindow(SwitchOptionWindow(di))
                     "clipboard_window" -> handleClipboardWindow(arg)
                     "set_color_scheme" -> handleColorScheme(arg)
