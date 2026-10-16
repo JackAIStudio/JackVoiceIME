@@ -33,5 +33,10 @@ object VoicePrefs {
         value: String,
     ) = prefs(ctx).edit { putString(KEY_API_KEY, value.trim()) }
 
+    fun setHotwordsEnabled(
+        ctx: Context,
+        value: Boolean,
+    ) = prefs(ctx).edit { putBoolean(KEY_HOTWORDS_ENABLED, value) }
+
     private fun prefs(ctx: Context) = PreferenceManager.getDefaultSharedPreferences(ctx)
 }

@@ -109,12 +109,18 @@ SPDX-License-Identifier: GPL-3.0-or-later
             android:theme="@style/Theme.DialogTheme"
             android:windowSoftInputMode="stateAlwaysVisible|adjustPan" />
 
+        <!-- JackVoice 主界面：对标 Typeless 的四个 Tab -->
+        <activity
+            android:name=".ui.jackvoice.JackVoiceActivity"
+            android:exported="false"
+            android:label="@string/trime_app_name" />
+
         <!-- Using an activity alias to disable/enable the app icon in the launcher -->
         <activity-alias
             android:name="com.osfans.trime.MainLauncherAlias"
             android:exported="true"
             android:label="@string/trime_app_name"
-            android:targetActivity=".ui.main.MainActivity">
+            android:targetActivity=".ui.jackvoice.JackVoiceActivity">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 

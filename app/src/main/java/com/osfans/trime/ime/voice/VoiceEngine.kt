@@ -6,6 +6,7 @@
 package com.osfans.trime.ime.voice
 
 import android.content.Context
+import com.osfans.trime.util.appContext
 import android.os.Handler
 import android.os.Looper
 import timber.log.Timber
@@ -41,6 +42,9 @@ object VoiceEngine {
     private val result = StringBuilder()
     private val stopped = AtomicBoolean(true)
 
+    /** 本次录音开始时间，用来算听写时长（统计页要用）。 */
+    private var startedAt = 0L
+
     @Volatile
     var isRecording = false
         private set
@@ -66,7 +70,7 @@ object VoiceEngine {
                 VolcAsrClient.Config(
                     apiKey = key,
                     resourceId = VoicePrefs.resourceId(ctx),
-                    hotwords = if (VoicePrefs.hotwordsEnabled(ctx)) BuiltinData.hotwords(ctx) else emptyList(),
+                    hotwords = if (VoicePrefs.hotwordsEnabled(ctx)) VoiceDictionary.hotwords(ctx) else emptyList(),
                 ),
                 object : VolcAsrClient.Listener {
                     override fun onPartial(text: String) {
@@ -106,6 +110,7 @@ object VoiceEngine {
         }
         recorder = rec
         isRecording = true
+        startedAt = System.currentTimeMillis()
     }
 
     /** 停止录音、发结束包，等服务端二遍终稿。等不到就用一遍结果兜底。 */
@@ -140,6 +145,11 @@ object VoiceEngine {
         asr = null
         result.setLength(0)
         val text = raw.trim()
+        val duration = if (startedAt > 0) System.currentTimeMillis() - startedAt else 0L
+        startedAt = 0L
+        if (text.isNotEmpty()) {
+            runCatching { VoiceHistory.append(appContext, text, duration) }
+        }
         post { listener?.onFinal(text) }
     }
 
