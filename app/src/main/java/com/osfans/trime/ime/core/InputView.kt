@@ -37,6 +37,7 @@ import com.osfans.trime.ime.keyboard.KeyboardWindow
 import com.osfans.trime.ime.popup.PopupDelegate
 import com.osfans.trime.ime.symbol.LiquidWindow
 import com.osfans.trime.ime.voice.VoiceWindow
+import com.osfans.trime.ime.window.BoardWindow
 import com.osfans.trime.ime.window.BoardWindowManager
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
@@ -189,6 +190,16 @@ class InputView(
         // show KeyboardWindow by default
         windowManager.attachWindow(KeyboardWindow)
 
+        // 语音面板占据整块键盘区时，收起顶部的候选/工具条（对齐 Typeless 的干净画面）。
+        // 输入栏设为 GONE 后 ConstraintLayout 会把窗口区上提到父容器顶部。
+        broadcaster.addReceiver(
+            object : InputBroadcastReceiver {
+                override fun onWindowAttached(window: BoardWindow) {
+                    inputBar.view.visibility = if (window === voiceWindow) View.GONE else View.VISIBLE
+                }
+            },
+        )
+
         keyboardBackground.imageDrawable = scope.drawable("keyboard_background")
 
         keyboardView =
@@ -325,7 +336,9 @@ class InputView(
         updateEnterKeyLabel(info)
         broadcaster.onStartInput(info)
         if (!restarting) {
-            windowManager.attachWindow(KeyboardWindow)
+            // 对标 Typeless：语音面板就是**主键盘**——点进任何输入框先看到「点击说话」。
+            // 要打字时按面板左下角的键盘键切到拼音键盘；键盘右下角的「语音」键切回来。
+            windowManager.attachWindow(voiceWindow)
         }
     }
 
@@ -338,7 +351,10 @@ class InputView(
             is RimeMessage.SchemaMessage -> {
                 broadcaster.onRimeSchemaUpdated(it.data)
 
-                windowManager.attachWindow(KeyboardWindow)
+                // 正在用语音面板时别被切回键盘——切方案不该把用户踢出语音
+                if (!windowManager.isAttached(voiceWindow)) {
+                    windowManager.attachWindow(KeyboardWindow)
+                }
             }
 
             is RimeMessage.OptionMessage -> {
