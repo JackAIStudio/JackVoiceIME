@@ -1,0 +1,318 @@
+[
+{
+"from": "Agentboard",
+"to": "AgenBoard"
+},
+{
+"from": "agentboard",
+"to": "AgenBoard"
+},
+{
+"from": "AgentBoard",
+"to": "AgenBoard"
+},
+{
+"from": "da vinci playground",
+"to": "DaVinci Playground"
+},
+{
+"from": "DaVinci Playground",
+"to": "DaVinci Playground"
+},
+{
+"from": "DaVinciPlayground",
+"to": "DaVinci Playground"
+},
+{
+"from": "Chrome DevTools",
+"to": "Chrome DevTools"
+},
+{
+"from": "build in public",
+"to": "build in public"
+},
+{
+"from": "达芬奇 Playground",
+"to": "DaVinci Playground"
+},
+{
+"from": "ChromeDevTools",
+"to": "Chrome DevTools"
+},
+{
+"from": "Sessions.spawn",
+"to": "Sessions.spawn"
+},
+{
+"from": "达芬奇Playground",
+"to": "DaVinci Playground"
+},
+{
+"from": "Cockpit Tools",
+"to": "Cockpit Tools"
+},
+{
+"from": "buildinpublic",
+"to": "build in public"
+},
+{
+"from": "Sessionsspawn",
+"to": "Sessions.spawn"
+},
+{
+"from": "Vibe Talking",
+"to": "Vibe Talking"
+},
+{
+"from": "Codex Status",
+"to": "Codex Status"
+},
+{
+"from": "CockpitTools",
+"to": "Cockpit Tools"
+},
+{
+"from": "coding agent",
+"to": "coding agent"
+},
+{
+"from": "Vibe Coding",
+"to": "Vibe Coding"
+},
+{
+"from": "VibeTalking",
+"to": "Vibe Talking"
+},
+{
+"from": "CodexStatus",
+"to": "Codex Status"
+},
+{
+"from": "Claude Code",
+"to": "Claude Code"
+},
+{
+"from": "codingagent",
+"to": "coding agent"
+},
+{
+"from": "AntiGravity",
+"to": "Antigravity"
+},
+{
+"from": "Agent Board",
+"to": "AgenBoard"
+},
+{
+"from": "VibeCoding",
+"to": "Vibe Coding"
+},
+{
+"from": "微信 ClawBot",
+"to": "微信 ClawBot"
+},
+{
+"from": "sub agents",
+"to": "SubAgents"
+},
+{
+"from": "ClaudeCode",
+"to": "Claude Code"
+},
+{
+"from": "Web Coding",
+"to": "Vibe Coding"
+},
+{
+"from": "Open Cloud",
+"to": "OpenClaw"
+},
+{
+"from": "open claw",
+"to": "OpenClaw"
+},
+{
+"from": "微信ClawBot",
+"to": "微信 ClawBot"
+},
+{
+"from": "SubAgents",
+"to": "SubAgents"
+},
+{
+"from": "voice ink",
+"to": "VoiceInk"
+},
+{
+"from": "AGENTS.md",
+"to": "AGENTS.md"
+},
+{
+"from": "Qwen3-ASR",
+"to": "Qwen3-ASR"
+},
+{
+"from": "OpenCloud",
+"to": "OpenClaw"
+},
+{
+"from": "cloud bot",
+"to": "ClawBot"
+},
+{
+"from": "Da Vinci",
+"to": "达芬奇"
+},
+{
+"from": "OpenClaw",
+"to": "OpenClaw"
+},
+{
+"from": "claw bot",
+"to": "ClawBot"
+},
+{
+"from": "claw hub",
+"to": "ClawHub"
+},
+{
+"from": "SubAgent",
+"to": "SubAgent"
+},
+{
+"from": "VoiceInk",
+"to": "VoiceInk"
+},
+{
+"from": "VoickInk",
+"to": "VoiceInk"
+},
+{
+"from": "AGENTSmd",
+"to": "AGENTS.md"
+},
+{
+"from": "Qwen3ASR",
+"to": "Qwen3-ASR"
+},
+{
+"from": "CloudBot",
+"to": "ClawBot"
+},
+{
+"from": "DaVinci",
+"to": "达芬奇"
+},
+{
+"from": "ClawBot",
+"to": "ClawBot"
+},
+{
+"from": "ClawHub",
+"to": "ClawHub"
+},
+{
+"from": "fun-asr",
+"to": "fun-asr"
+},
+{
+"from": "Main 分支",
+"to": "Main 分支"
+},
+{
+"from": "i Cloud",
+"to": "iCloud"
+},
+{
+"from": "funasr",
+"to": "fun-asr"
+},
+{
+"from": "B roll",
+"to": "B roll"
+},
+{
+"from": "A roll",
+"to": "A roll"
+},
+{
+"from": "Main分支",
+"to": "Main 分支"
+},
+{
+"from": "iCloud",
+"to": "iCloud"
+},
+{
+"from": "Broll",
+"to": "B roll"
+},
+{
+"from": "Aroll",
+"to": "A roll"
+},
+{
+"from": "Cloud",
+"to": "Claude"
+},
+{
+"from": "Tree",
+"to": "Trae"
+},
+{
+"from": "这个绘画",
+"to": "这个会话"
+},
+{
+"from": "当前绘画",
+"to": "当前会话"
+},
+{
+"from": "绘画文本",
+"to": "会话文本"
+},
+{
+"from": "绘画中",
+"to": "会话中"
+},
+{
+"from": "绘画里",
+"to": "会话里"
+},
+{
+"from": "绘画的",
+"to": "会话的"
+},
+{
+"from": "A 肉",
+"to": "A roll"
+},
+{
+"from": "B 肉",
+"to": "B roll"
+},
+{
+"from": "绘画",
+"to": "会话"
+},
+{
+"from": "会画",
+"to": "会话"
+},
+{
+"from": "会化",
+"to": "会话"
+},
+{
+"from": "会花",
+"to": "会话"
+},
+{
+"from": "会华",
+"to": "会话"
+},
+{
+"from": "金鱼",
+"to": "鲸鱼"
+}
+]

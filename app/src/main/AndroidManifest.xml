@@ -11,6 +11,11 @@ SPDX-License-Identifier: GPL-3.0-or-later
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <!-- 语音面板：录音 + 联网识别 -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
 
     <application
         android:name="com.osfans.trime.TrimeApplication"
@@ -119,5 +124,11 @@ SPDX-License-Identifier: GPL-3.0-or-later
         </activity-alias>
 
         <!-- All activities must be declared above <activity-alias> tag -->
+
+        <!-- 语音面板：麦克风前台服务（拿麦克风的前提，见 VoiceCaptureService 注释） -->
+        <service
+            android:name="com.osfans.trime.ime.voice.VoiceCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
     </application>
 </manifest>

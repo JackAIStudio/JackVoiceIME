@@ -145,6 +145,7 @@ class MainActivity : AppCompatActivity() {
         supportActionBar?.setDisplayHomeAsUpEnabled(true)
         processIntent(intent)
         checkNotificationPermission()
+        checkRecordAudioPermission()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -230,6 +231,33 @@ class MainActivity : AppCompatActivity() {
     override fun onDestroy() {
         testInputPanel = null
         super.onDestroy()
+    }
+
+    /**
+     * 语音面板要录音，必须先拿到 RECORD_AUDIO。
+     *
+     * 注意：这一步不能省，也不能只靠 `pm grant`——录音的放行看的是 AppOps 的
+     * **Uid mode**，只有走系统授权弹窗才会被置成 `foreground`；`pm grant` 之后
+     * Uid mode 仍是 `ignore`，录音会被 audio policy 拒掉
+     * （`getInputForAttr: missing perms for source 1`）。
+     */
+    private fun checkRecordAudioPermission() {
+        if (XXPermissions.isGranted(this, Permission.RECORD_AUDIO)) {
+            return
+        } else {
+            AlertDialog
+                .Builder(this)
+                .setIconAttribute(android.R.attr.alertDialogIcon)
+                .setTitle(R.string.voice_permission_title)
+                .setMessage(R.string.voice_permission_message)
+                .setPositiveButton(R.string.grant_permission) { _, _ ->
+                    XXPermissions
+                        .with(this)
+                        .permission(Permission.RECORD_AUDIO)
+                        .request(null)
+                }.setNegativeButton(android.R.string.cancel, null)
+                .show()
+        }
     }
 
     private fun checkNotificationPermission() {

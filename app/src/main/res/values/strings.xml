@@ -253,4 +253,11 @@
     <string name="word_segment">Word segment</string>
     <string name="star_success">Star success</string>
     <string name="ignore_system_gesture_insets">Ignore system gesture insets</string>
+    <string name="voice_listening">正在聆听…</string>
+    <string name="voice_listening_hint">点键盘中间的大圆结束</string>
+    <string name="voice_cancel">取消</string>
+    <string name="voice_channel_name">语音听写</string>
+    <string name="voice_channel_desc">录音时在通知栏显示状态</string>
+    <string name="voice_permission_title">需要麦克风权限</string>
+    <string name="voice_permission_message">语音键盘要把你说的话转成文字，需要录音权限。授权后录音开关才会真正生效。</string>
 </resources>
