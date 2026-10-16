@@ -16,6 +16,7 @@ import android.widget.ImageView
 import androidx.annotation.RequiresApi
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updateLayoutParams
 import androidx.lifecycle.lifecycleScope
 import com.osfans.trime.core.CompositionProto
@@ -155,6 +156,34 @@ class InputView(
     private var lastKeyboardHeightPx = 0
     private val voicePanelHeightPx: Int by lazy { dp(VoicePanelView.PANEL_HEIGHT_DP) }
 
+    /**
+     * 顶栏槽位归属：
+     *   语音面板        → 候选栏收起（面板自己带工具条）
+     *   打字键盘 + 输入中 → 候选栏（此时键盘自带的工具条还在其下方）
+     *   打字键盘 + 空闲   → 只留键盘自带的工具条
+     */
+    private fun applyBarVisibility(isVoice: Boolean) {
+        val composing = rime.run { statusCached.isComposing }
+        // 候选栏只在真正有候选时出现；空闲时那一行留给键盘自带的工具条。
+        inputBar.view.visibility = if (!isVoice && composing) View.VISIBLE else View.GONE
+        applyKeyboardViewHeight(isVoice)
+    }
+
+    /**
+     * 整块键盘区的显式高度。
+     *
+     * 主题里的 `keyboard_height` 把窗口区锁死，ConstraintLayout 不会自己长高，
+     * 所以这里显式给：语音面板用面板自己的高度，打字键盘用键盘窗口报上来的高度
+     *（键盘窗口已经把顶部工具条算进自己的高度里了，见 KeyboardWindow）。
+     */
+    private fun applyKeyboardViewHeight(isVoice: Boolean = voiceMode) {
+        if (!this::keyboardView.isInitialized) return
+        if (keyboardView.layoutParams == null) return
+        keyboardView.updateLayoutParams {
+            height = if (isVoice) voicePanelHeightPx else lastKeyboardHeightPx
+        }
+    }
+
     private fun broadcastKeyAppearanceUpdate() {
         val composing = rime.run { statusCached.isComposing }
         val hasMenu = rime.run { hasMenu }
@@ -163,6 +192,7 @@ class InputView(
         if (current != lastAppearanceState) {
             lastAppearanceState = current
             broadcaster.onKeyAppearanceUpdate(current.first, current.second, current.third)
+            applyBarVisibility(voiceMode)
         }
     }
 
@@ -173,7 +203,8 @@ class InputView(
             return dp(value)
         }
 
-    val keyboardView: View
+    /** 整块键盘区（含顶栏槽位）。init 里赋值，之后高度由 applyKeyboardViewHeight 管。 */
+    lateinit var keyboardView: View
 
     /** Restyles colors after a scheme switch without rebuilding the view tree. */
     fun refreshColors() {
@@ -204,11 +235,12 @@ class InputView(
             object : InputBroadcastReceiver {
                 override fun onWindowAttached(window: BoardWindow) {
                     val isVoice = window === voiceWindow
-                    inputBar.view.visibility = if (isVoice) View.GONE else View.VISIBLE
                     voiceMode = isVoice
+                    applyBarVisibility(isVoice)
                     windowManager.view.updateLayoutParams {
                         height = if (isVoice) voicePanelHeightPx else lastKeyboardHeightPx
                     }
+                    applyKeyboardViewHeight(isVoice)
                 }
             },
         )
@@ -273,6 +305,7 @@ class InputView(
                         windowManager.view.updateLayoutParams {
                             height = it
                         }
+                        applyKeyboardViewHeight(isVoice = false)
                     }
                 }
             }
@@ -340,9 +373,12 @@ class InputView(
     }
 
     override fun onApplyWindowInsets(insets: WindowInsets): WindowInsets {
+        // 系统给输入法的可见高度里已经扣掉导航栏了，这里不要再留一次边距——
+        // 多留一个导航栏的高度会把整块键盘往上顶。
         bottomPaddingSpace.updateLayoutParams<LayoutParams> {
             bottomMargin = getNavBarBottomInset(insets)
         }
+        applyKeyboardViewHeight()
         return insets
     }
 

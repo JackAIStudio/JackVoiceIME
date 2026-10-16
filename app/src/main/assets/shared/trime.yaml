@@ -39,7 +39,9 @@ style:
   label_text_size: 22 #標籤字號
   label_font: label.ttf #編標籤字型
   latin_font: latin.ttf #西文字型
-  keyboard_height: 250 #锁定键盘高度，避免切换时键盘高度变化而造成闪烁
+  # 键盘区总高要容得下「候选/工具条槽位 + 按键 + 导航栏」，系统给输入法的高度有限，
+  # 原来 250 会把顶上的工具条顶出窗口上沿（实测被切掉一截）。
+  keyboard_height: 232 #锁定键盘高度，避免切换时键盘高度变化而造成闪烁
   keyboard_height_land: 200 #锁定横屏下键盘高度，避免切换时键盘高度变化而造成闪烁
   preview_font: latin.ttf #按鍵提示字型
   preview_height: 60 #按鍵提示高度

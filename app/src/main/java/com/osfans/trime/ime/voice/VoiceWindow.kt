@@ -49,13 +49,14 @@ class VoiceWindow(di: DI) :
     override fun onCreateView(): View {
         val view = VoicePanelView(context)
         view.onOrbTap = { onOrbTap() }
-        view.onKeyboardTap = { switchToKeyboard(ascii = null) }
+        // 左下角换成「切换输入法」：初期还要用别的输入法打字
+        view.onImeSwitchTap = { showImePicker() }
         view.onBackspaceTap = { service.sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL) }
         view.onAtTap = { service.commitText("@") }
         view.onActionTap = { performEditorAction() }
-        // 顶部切换器的「拼」/「EN」：切到拼音/英文键盘，并同步 Rime 的 ascii_mode
-        view.onPinyinTab = { switchToKeyboard(ascii = false) }
-        view.onEnglishTab = { switchToKeyboard(ascii = true) }
+        // 顶部切换胶囊的「拼」/「EN」：切到拼音/英文键盘，并同步 Rime 的 ascii_mode
+        view.toolbar.onPinyinTap = { switchToKeyboard(ascii = false) }
+        view.toolbar.onEnglishTap = { switchToKeyboard(ascii = true) }
         panel = view
         return view
     }
@@ -64,6 +65,7 @@ class VoiceWindow(di: DI) :
         VoiceEngine.setListener(this)
         setState(VoiceState.Idle)
         panel?.setActionLabel(actionLabel())
+        panel?.toolbar?.setActive(VoiceTab.Voice)
     }
 
     override fun onDetached() {
@@ -131,6 +133,14 @@ class VoiceWindow(di: DI) :
     // ── 底栏与顶栏 ────────────────────────────────────────────────────────
 
     /** ascii 为 null 表示只是回键盘，不动中英模式。 */
+    /** 弹出系统输入法选择器——这就是那颗地球键该干的事。 */
+    private fun showImePicker() {
+        runCatching {
+            service.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+                ?.showInputMethodPicker()
+        }
+    }
+
     private fun switchToKeyboard(ascii: Boolean?) {
         VoiceEngine.cancel()
         VoiceCaptureService.stop(service)

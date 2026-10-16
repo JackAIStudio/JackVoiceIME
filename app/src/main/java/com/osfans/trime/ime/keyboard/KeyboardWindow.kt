@@ -8,6 +8,7 @@ import android.graphics.Point
 import android.os.Build
 import android.text.InputType
 import android.view.View
+import android.widget.LinearLayout
 import android.view.WindowInsets
 import android.view.inputmethod.EditorInfo
 import android.widget.FrameLayout
@@ -23,6 +24,10 @@ import com.osfans.trime.ime.broadcast.InputBroadcastReceiver
 import com.osfans.trime.ime.core.TrimeInputMethodService
 import com.osfans.trime.ime.keyboard.KeyboardPrefs.isLandscapeMode
 import com.osfans.trime.ime.popup.PopupDelegate
+import com.osfans.trime.ime.voice.VoiceTab
+import com.osfans.trime.ime.window.BoardWindowManager
+import com.osfans.trime.ime.voice.VoiceToolbarView
+import com.osfans.trime.ime.voice.VoiceWindow
 import com.osfans.trime.ime.window.BoardWindow
 import com.osfans.trime.ime.window.ResidentWindow
 import com.osfans.trime.util.isLandscape
@@ -36,6 +41,7 @@ import splitties.dimensions.dp
 import splitties.systemservices.windowManager
 import splitties.views.dsl.core.add
 import splitties.views.dsl.core.frameLayout
+import splitties.views.dsl.core.wrapContent
 import splitties.views.dsl.core.lParams
 import splitties.views.dsl.core.matchParent
 import timber.log.Timber
@@ -50,6 +56,8 @@ class KeyboardWindow(di: DI) :
     private val commonKeyboardActionListener: CommonKeyboardActionListener by instance()
     private val popup: PopupDelegate by instance()
     private val enterKeyDisplay: EnterKeyDisplayDelegate by instance()
+    private val boardWindowManager: BoardWindowManager by instance()
+    private val voiceWindow: VoiceWindow by instance()
 
     private val cursorCapsMode: Int
         get() =
@@ -70,6 +78,11 @@ class KeyboardWindow(di: DI) :
     val currentKeyboardHeight = _currentKeyboardHeight.asSharedFlow()
 
     private lateinit var keyboardView: FrameLayout
+
+    /** 键盘自带顶栏：品牌 + 🎙|拼|EN 胶囊。整块键盘 = 顶栏 + 按键。 */
+    private lateinit var toolbar: VoiceToolbarView
+
+    private val toolbarHeightPx: Int get() = context.dp(VoiceToolbarView.HEIGHT_DP)
 
     companion object : ResidentWindow.Key {
         lateinit var currentKeyboard: Keyboard
@@ -108,8 +121,46 @@ class KeyboardWindow(di: DI) :
     override fun onCreateView(): View {
         keyboardView = context.frameLayout(R.id.keyboard_view)
         keyboardView.addOnLayoutChangeListener(onKeyboardViewLayoutChangeListener)
+
+        toolbar =
+            VoiceToolbarView(context).also { bar ->
+                bar.onVoiceTap = { boardWindowManager.attachWindow(voiceWindow) }
+                bar.onPinyinTap = {
+                    service.postRimeJob { setRuntimeOption("ascii_mode", false) }
+                    bar.setActive(VoiceTab.Pinyin)
+                }
+                bar.onEnglishTap = {
+                    service.postRimeJob { setRuntimeOption("ascii_mode", true) }
+                    bar.setActive(VoiceTab.English)
+                }
+            }
+
         attachKeyboard(evalKeyboard(".default"))
-        return keyboardView
+
+        // 顶栏放在键盘自己的布局里，而不是塞到 InputView 的顶栏槽位——
+        // 后者会和 preedit 争高度，实测会把工具条顶出窗口上沿切掉一截。
+        return LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(
+                toolbar,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    toolbarHeightPx,
+                ),
+            )
+            addView(
+                keyboardView,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                ),
+            )
+        }
+    }
+
+    /** 键盘高度报给外面时要带上顶栏，否则 InputView 会少给这一截。 */
+    private fun reportHeight(keysHeight: Int) {
+        runBlocking { _currentKeyboardHeight.emit(keysHeight + toolbarHeightPx) }
     }
 
     private fun detachCurrentView() {
@@ -176,7 +227,7 @@ class KeyboardWindow(di: DI) :
         }
 
         keyboard.also {
-            runBlocking { _currentKeyboardHeight.emit(it.keyboardHeight) }
+            reportHeight(it.keyboardHeight)
             if (it.isLock) lastLockKeyboardId = target
             dispatchCapsState(it::setShifted)
 
@@ -354,6 +405,7 @@ class KeyboardWindow(di: DI) :
         }
     }
 
+
     override fun onKeyAppearanceUpdate(composing: Boolean, menu: Boolean, paging: Boolean) {
         if (!rime.run { statusCached }.isAsciiMode) {
             activeKeyboard?.appearanceStateKeys?.forEach { key ->
@@ -376,6 +428,7 @@ class KeyboardWindow(di: DI) :
     }
 
     override fun onRimeOptionUpdated(value: RimeMessage.OptionMessage.Data) {
+        if (value.option == "ascii_mode") syncToolbarActive()
         val option = value.option
         when {
             option.startsWith("_keyboard_") -> {
@@ -403,6 +456,14 @@ class KeyboardWindow(di: DI) :
     }
 
     override fun onAttached() {
+        syncToolbarActive()
+    }
+
+    private fun syncToolbarActive() {
+        if (!::toolbar.isInitialized) return
+        toolbar.setActive(
+            if (rime.run { statusCached }.isAsciiMode) VoiceTab.English else VoiceTab.Pinyin,
+        )
     }
 
     override fun onDetached() {

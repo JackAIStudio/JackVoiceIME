@@ -481,3 +481,7 @@ app/src/main/jni/boost/
 # kotlin
 .kotlin
 
+
+# 本机构建输出被指向 iCloud 之外（见 JACKVOICE.md 的说明），符号链接不入库
+/app/build
+/build

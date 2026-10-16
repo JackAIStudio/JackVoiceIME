@@ -36,17 +36,16 @@ class VoicePanelView(
     context: Context,
 ) : FrameLayout(context) {
     var onOrbTap: (() -> Unit)? = null
-    var onKeyboardTap: (() -> Unit)? = null
+    /** 左下角：弹出系统输入法选择器（初期还要用别的输入法打字）。 */
+    var onImeSwitchTap: (() -> Unit)? = null
     var onBackspaceTap: (() -> Unit)? = null
     var onAtTap: (() -> Unit)? = null
     var onActionTap: (() -> Unit)? = null
-    var onPinyinTab: (() -> Unit)? = null
-    var onEnglishTab: (() -> Unit)? = null
-
-    /** 右侧键盘切换器里当前高亮的那一格。 */
-    private val tabVoice = tabCell(WaveGlyphView(context), active = true)
-    private val tabPinyin = tabCell(labelCell("\u62fc")) { onPinyinTab?.invoke() }
-    private val tabEnglish = tabCell(labelCell("EN")) { onEnglishTab?.invoke() }
+    /** 顶部切换胶囊，语音面板与打字键盘共用同一个组件。 */
+    val toolbar =
+        VoiceToolbarView(context).apply {
+            onVoiceTap = { /* 已经在语音面板上 */ }
+        }
 
     private val statusView =
         TextView(context).apply {
@@ -73,7 +72,7 @@ class VoicePanelView(
     private val bottomBar =
         FrameLayout(context).apply {
             addView(
-                circleKey("\u2328", WHITE_KEY, onKeyboardTap),
+                globeKey(onImeSwitchTap),
                 LayoutParams(dp(48), dp(48)).apply {
                     gravity = Gravity.BOTTOM or Gravity.START
                     marginStart = dp(22)
@@ -108,44 +107,9 @@ class VoicePanelView(
     init {
         setBackgroundColor(BACKGROUND)
 
-        // ── 顶部工具条：左品牌、右键盘切换器 [🎙|拼|EN] ─────────────────────
-        // 位置按 Typeless 量得：整行中心距面板顶 33dp，切换器 140×30dp、距右 15dp。
-        val switcher =
-            LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                background = roundedDrawable(WHITE_KEY, dp(15))
-                val cell =
-                    LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f)
-                addView(tabVoice, cell)
-                addView(tabPinyin, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
-                addView(tabEnglish, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
-            }
-        val toolbar =
-            FrameLayout(context).apply {
-                addView(
-                    TextView(context).apply {
-                        text = BRAND
-                        setTextColor(TEXT_PRIMARY)
-                        setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
-                        typeface = android.graphics.Typeface.DEFAULT_BOLD
-                        gravity = Gravity.CENTER_VERTICAL
-                    },
-                    LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT).apply {
-                        gravity = Gravity.START or Gravity.CENTER_VERTICAL
-                        marginStart = dp(18)
-                    },
-                )
-                addView(
-                    switcher,
-                    LayoutParams(dp(140), dp(30)).apply {
-                        gravity = Gravity.END or Gravity.CENTER_VERTICAL
-                        marginEnd = dp(15)
-                    },
-                )
-            }
         addView(
             toolbar,
-            LayoutParams(LayoutParams.MATCH_PARENT, dp(44)).apply {
+            LayoutParams(LayoutParams.MATCH_PARENT, dp(VoiceToolbarView.HEIGHT_DP)).apply {
                 gravity = Gravity.TOP
                 topMargin = dp(11)
             },
@@ -246,39 +210,22 @@ class VoicePanelView(
             setOnClickListener { onClick() }
         }
 
+    /** 左下角那颗「切换输入法」：用画的地球，避免 emoji 字体的色块。 */
+    private fun globeKey(onClick: (() -> Unit)?): FrameLayout =
+        FrameLayout(context).apply {
+            background = circleDrawable(WHITE_KEY)
+            isClickable = true
+            setOnClickListener { onClick?.invoke() }
+            addView(
+                GlobeGlyphView(context),
+                LayoutParams(dp(20), dp(20)).apply { gravity = Gravity.CENTER },
+            )
+        }
+
     private fun circleDrawable(color: Int) =
         android.graphics.drawable.GradientDrawable().apply {
             shape = android.graphics.drawable.GradientDrawable.OVAL
             setColor(color)
-        }
-
-    /** 切换器里的一格；active 的那格铺一层浅灰底，跟 Typeless 一样。 */
-    private fun tabCell(
-        content: View,
-        active: Boolean = false,
-        onClick: (() -> Unit)? = null,
-    ): FrameLayout =
-        FrameLayout(context).apply {
-            if (active) background = roundedDrawable(TAB_ACTIVE, dp(15))
-            isClickable = true
-            setOnClickListener { onClick?.invoke() }
-            addView(
-                content,
-                LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT).apply {
-                    marginStart = dp(9)
-                    marginEnd = dp(9)
-                    topMargin = dp(6)
-                    bottomMargin = dp(6)
-                },
-            )
-        }
-
-    private fun labelCell(text: String): TextView =
-        TextView(context).apply {
-            this.text = text
-            gravity = Gravity.CENTER
-            setTextColor(TEXT_PRIMARY)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
         }
 
     private fun roundedDrawable(
@@ -309,10 +256,7 @@ class VoicePanelView(
         private const val ACTION_LABEL = 0xFF9A9A9A.toInt()
         private const val TEXT_PRIMARY = 0xFF111111.toInt()
         private const val TEXT_SECONDARY = 0xFF8A8A8A.toInt()
-        private const val TAB_ACTIVE = 0xFFEDEDED.toInt()
 
-        /** 顶部左侧品牌名（Typeless 那里是它的 logo）。 */
-        private const val BRAND = "JackVoice"
     }
 }
 
@@ -495,13 +439,14 @@ class VoiceOrbView(
     }
 }
 
-/** 切换器里的语音标识：五根细竖条组成的小波形（对应 Typeless 那个波形图标）。 */
-class WaveGlyphView(
+/** 简笔地球：外圈 + 一道竖椭圆 + 一条横线。用来表示「切换输入法」。 */
+class GlobeGlyphView(
     context: Context,
 ) : View(context) {
     private val paint =
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0xFF111111.toInt()
+            style = Paint.Style.STROKE
+            color = 0xFF3A3A3A.toInt()
             strokeCap = Paint.Cap.ROUND
         }
 
@@ -509,14 +454,11 @@ class WaveGlyphView(
         super.onDraw(canvas)
         val cx = width / 2f
         val cy = height / 2f
-        val h = height.toFloat()
-        val weights = floatArrayOf(0.45f, 0.80f, 1f, 0.70f, 0.40f)
-        paint.strokeWidth = h * 0.13f
-        val gap = h * 0.28f
-        for (i in weights.indices) {
-            val bh = h * weights[i]
-            val x = cx + (i - 2) * gap
-            canvas.drawLine(x, cy - bh / 2, x, cy + bh / 2, paint)
-        }
+        val r = minOf(width, height) / 2f - paint.strokeWidth
+        paint.strokeWidth = r * 0.16f
+        canvas.drawCircle(cx, cy, r, paint)
+        canvas.drawLine(cx - r, cy, cx + r, cy, paint)
+        val rect = android.graphics.RectF(cx - r * 0.46f, cy - r, cx + r * 0.46f, cy + r)
+        canvas.drawArc(rect, 0f, 360f, false, paint)
     }
 }

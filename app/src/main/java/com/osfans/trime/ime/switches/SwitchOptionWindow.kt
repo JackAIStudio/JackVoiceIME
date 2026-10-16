@@ -45,27 +45,17 @@ class SwitchOptionWindow(di: DI) :
     private val scope: ThemeScope by instance()
     private val theme: Theme get() = scope.theme
 
+    /**
+     * 面板顶部那排功能键。Trime 默认给四个（主题 / 方案 / 更新配置 / 虚拟键盘），
+     * 这里只留「更新配置」——改完 Rime 配置要重新部署时用得上；其余三个对这个 App
+     * 没意义，而且「方案」「主题」点下去会把用户弹进 Trime 原生界面。
+     */
     private val staticEntries by lazy {
         arrayOf(
-            SwitchOptionEntry.Static(
-                context.getString(R.string.theme),
-                R.drawable.ic_baseline_color_lens_24,
-                SwitchOptionEntry.Static.Type.ThemeList,
-            ),
-            SwitchOptionEntry.Static(
-                context.getString(R.string.schemata),
-                R.drawable.ic_round_view_list_24,
-                SwitchOptionEntry.Static.Type.SchemaList,
-            ),
             SwitchOptionEntry.Static(
                 context.getString(R.string.update_config),
                 R.drawable.ic_baseline_sync_24,
                 SwitchOptionEntry.Static.Type.UpdateConfig,
-            ),
-            SwitchOptionEntry.Static(
-                context.getString(R.string.virtual_keyboard),
-                R.drawable.ic_baseline_keyboard_24,
-                SwitchOptionEntry.Static.Type.Keyboard,
             ),
         )
     }
