@@ -62,24 +62,23 @@ git clone --recursive <this-repo>          # librime / OpenCC / lua / snappy 是
 本机适配过两处（都已在仓库里）：`minSdk = 24`（NDK 28 下 lua 的 `fseeko` 需要 API 24）、
 `settings.gradle.kts` 加了阿里云镜像。
 
-### ⚠️ 项目目录不能在 iCloud 里
+### ⚠️ 项目目录不能在 iCloud 里（**本仓已搬走**）
 
-`~/Documents` 被「桌面与文档」同步托管时（`com.apple.file-provider-domain-id:
-com.apple.CloudDocs.iCloudDriveFileProvider/…`），iCloud 会为它跟不上的文件生成
-`xxx 2.kt` 这类**冲突副本**。Gradle 扫到就报：
+本仓原本放在 `~/Documents/Playground/Trime`，而 `~/Documents` 被「桌面与文档」
+iCloud 同步托管（`com.apple.file-provider-domain-id:
+com.apple.CloudDocs.iCloudDriveFileProvider/…`）。iCloud 会为它跟不上的文件生成
+`xxx 2.kt` 这类**冲突副本**，连 `.git/index` 都被生成过 4 份。后果：
 
 ```
 Cannot access output property 'destinationDirectory' … Failed to create MD5 hash for file: …/InputView 2.kt
 remote unpack failed: index-pack failed          # 推送也会挂
+Resource deadlock avoided                        # 连 mv / rm 都会被锁住
 ```
 
-构建过程中会持续产生新副本，所以「清理 → 构建」循环也救不回来。**根治办法是把仓库
-移出 `~/Documents`**（比如 `~/Projects/`）。临时办法：把构建输出目录符号链接到 iCloud 之外
+构建过程中会持续产生新副本，所以「清理 → 构建」循环也救不回来（实测连试 10 次全败）。
 
-```sh
-rm -rf app/build build && mkdir -p /tmp/trime-out/app-build /tmp/trime-out/root-build
-ln -s /tmp/trime-out/app-build app/build && ln -s /tmp/trime-out/root-build build
-```
+**本仓现已移到 `~/Projects/JackVoiceIME`**，不在 iCloud 里，构建连做多次零失败、零副本。
+`~/Documents/Playground/` 下其它仓同样受影响，要动它们建议一并搬出。
 
 ## 词库
 
