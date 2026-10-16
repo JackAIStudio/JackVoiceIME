@@ -62,9 +62,24 @@ git clone --recursive <this-repo>          # librime / OpenCC / lua / snappy 是
 本机适配过两处（都已在仓库里）：`minSdk = 24`（NDK 28 下 lua 的 `fseeko` 需要 API 24）、
 `settings.gradle.kts` 加了阿里云镜像。
 
-> macOS 会时不时生成 `xxx 2.kt` 这类副本文件，Gradle 扫到就报
-> `Cannot access output property …` 或 `index-pack failed`。清理：
-> `find . -depth \( -name "* [0-9].*" -o -name "* [0-9]" \) -not -path "./.git/*" -not -path "*/jni/*" -exec rm -rf {} +`
+### ⚠️ 项目目录不能在 iCloud 里
+
+`~/Documents` 被「桌面与文档」同步托管时（`com.apple.file-provider-domain-id:
+com.apple.CloudDocs.iCloudDriveFileProvider/…`），iCloud 会为它跟不上的文件生成
+`xxx 2.kt` 这类**冲突副本**。Gradle 扫到就报：
+
+```
+Cannot access output property 'destinationDirectory' … Failed to create MD5 hash for file: …/InputView 2.kt
+remote unpack failed: index-pack failed          # 推送也会挂
+```
+
+构建过程中会持续产生新副本，所以「清理 → 构建」循环也救不回来。**根治办法是把仓库
+移出 `~/Documents`**（比如 `~/Projects/`）。临时办法：把构建输出目录符号链接到 iCloud 之外
+
+```sh
+rm -rf app/build build && mkdir -p /tmp/trime-out/app-build /tmp/trime-out/root-build
+ln -s /tmp/trime-out/app-build app/build && ln -s /tmp/trime-out/root-build build
+```
 
 ## 词库
 
