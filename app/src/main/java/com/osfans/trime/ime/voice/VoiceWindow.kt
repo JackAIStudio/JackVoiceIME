@@ -48,7 +48,11 @@ class VoiceWindow(di: DI) :
         view.onOrbTap = { onOrbTap() }
         view.onKeyboardTap = { windowManager.attachWindow(keyboardWindow) }
         view.onBackspaceTap = { service.sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL) }
+        view.onAtTap = { service.commitText("@") }
         view.onActionTap = { performEditorAction() }
+        // 顶部切换器的「拼」/「EN」：切到拼音/英文键盘，并同步 Rime 的 ascii_mode
+        view.onPinyinTab = { switchToKeyboard(ascii = false) }
+        view.onEnglishTab = { switchToKeyboard(ascii = true) }
         panel = view
         return view
     }
@@ -88,6 +92,11 @@ class VoiceWindow(di: DI) :
 
             VoiceState.Thinking -> Unit
         }
+    }
+
+    private fun switchToKeyboard(ascii: Boolean) {
+        service.postRimeJob { setRuntimeOption("ascii_mode", ascii) }
+        windowManager.attachWindow(keyboardWindow)
     }
 
     private fun actionLabel(): String {

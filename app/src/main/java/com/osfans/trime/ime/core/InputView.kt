@@ -36,6 +36,7 @@ import com.osfans.trime.ime.keyboard.KeyboardPrefs.isLandscapeMode
 import com.osfans.trime.ime.keyboard.KeyboardWindow
 import com.osfans.trime.ime.popup.PopupDelegate
 import com.osfans.trime.ime.symbol.LiquidWindow
+import com.osfans.trime.ime.voice.VoicePanelView
 import com.osfans.trime.ime.voice.VoiceWindow
 import com.osfans.trime.ime.window.BoardWindow
 import com.osfans.trime.ime.window.BoardWindowManager
@@ -149,6 +150,11 @@ class InputView(
 
     private var lastAppearanceState = Triple(false, false, false)
 
+    /** 语音面板挂载中：此时键盘区用语音面板自己的高度，并忽略键盘高度的变化。 */
+    private var voiceMode = false
+    private var lastKeyboardHeightPx = 0
+    private val voicePanelHeightPx: Int by lazy { dp(VoicePanelView.PANEL_HEIGHT_DP) }
+
     private fun broadcastKeyAppearanceUpdate() {
         val composing = rime.run { statusCached.isComposing }
         val hasMenu = rime.run { hasMenu }
@@ -190,12 +196,19 @@ class InputView(
         // show KeyboardWindow by default
         windowManager.attachWindow(KeyboardWindow)
 
-        // 语音面板占据整块键盘区时，收起顶部的候选/工具条（对齐 Typeless 的干净画面）。
-        // 输入栏设为 GONE 后 ConstraintLayout 会把窗口区上提到父容器顶部。
+        // 语音面板占据整块键盘区时：
+        //   ① 收起顶部的候选/工具条（对齐 Typeless 的干净画面，GONE 后 ConstraintLayout
+        //      会把窗口区上提到父容器顶部）；
+        //   ② 把键盘区加高到 Typeless 的尺度（它的语音面板约 320dp，Trime 默认键盘只有 250dp）。
         broadcaster.addReceiver(
             object : InputBroadcastReceiver {
                 override fun onWindowAttached(window: BoardWindow) {
-                    inputBar.view.visibility = if (window === voiceWindow) View.GONE else View.VISIBLE
+                    val isVoice = window === voiceWindow
+                    inputBar.view.visibility = if (isVoice) View.GONE else View.VISIBLE
+                    voiceMode = isVoice
+                    windowManager.view.updateLayoutParams {
+                        height = if (isVoice) voicePanelHeightPx else lastKeyboardHeightPx
+                    }
                 }
             },
         )
@@ -254,8 +267,12 @@ class InputView(
         updateWindowViewHeightJob =
             service.lifecycleScope.launch {
                 keyboardWindow.currentKeyboardHeight.collect {
-                    windowManager.view.updateLayoutParams {
-                        height = it
+                    lastKeyboardHeightPx = it
+                    // 语音面板挂载时不受键盘高度影响（它有自己的一套高度）
+                    if (!voiceMode) {
+                        windowManager.view.updateLayoutParams {
+                            height = it
+                        }
                     }
                 }
             }
