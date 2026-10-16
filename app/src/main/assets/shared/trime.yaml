@@ -24,7 +24,7 @@ style:
   comment_vertical_bias: 0.0 #编码提示垂直偏移位置（仅 overlay 模式使用，需要间隙空间足够，范围 0.0~1.0，0.0=top，0.5=center，1.0=bottom）
   comment_text_size: 10 #編碼提示字號
   hanb_font: hanb.ttf #擴充字型
-  horizontal_gap: 1 #鍵水平間距
+  horizontal_gap: 4 #鍵水平間距
   keyboard_padding: 0 #竖屏模式下，屏幕左右两侧与键盘的距离（曲面屏减少误触）
   keyboard_padding_left: 0 #竖屏屏模式下，左手键盘布局，屏幕左侧与键盘的距离
   keyboard_padding_right: 40 #竖屏屏模式下，左手键盘布局，屏幕右侧与键盘的距离
@@ -46,12 +46,12 @@ style:
   preview_offset: -12 #按鍵提示縱向偏移
   preview_text_size: 40 #按鍵提示字號
   reset_ascii_mode_on_focus_change: false #焦点变更弹起输入法软键盘时，重置 ascii_mode
-  round_corner: 8 #按鍵圓角半徑
+  round_corner: 12 #按鍵圓角半徑（对齐 Typeless）
   shadow_radius: 0.0 #按鍵陰影半徑
   symbol_font: symbol.ttf #符號字型
   symbol_text_size: 10 #符號字號
   text_font: latin.ttf #編碼字型
-  vertical_gap: 1 #鍵盤行距
+  vertical_gap: 4 #鍵盤行距
   #background_folder: #背景图保存在background目录下的哪个子目录
   enter_label_mode: 0  #是否使用App提供的ActionLabel内容作为Enter键的文本（由于多数App没有适配ActionLable，实际影响不大）。0不使用，1只使用actionlabel，2优先使用，3当其他方式没有获得label时才读取actionlabel
   enter_labels:  # 定义Enter键的文本
@@ -141,16 +141,16 @@ preset_color_schemes:
   default:
     name: 預設／default #方案名稱
     author: osfans #作者資訊
-    back_color: 0xe4e7e9 #候選區背景
-    border_color: 0xc1c7ca #邊框
-    candidate_separator_color: 0xc1c7ca #候選分割背景
-    candidate_text_color: 0x5a676e #候選文字
+    back_color: 0xf1f1f1 #候選區背景
+    border_color: 0xd8d8d8 #邊框
+    candidate_separator_color: 0xd8d8d8 #候選分割背景
+    candidate_text_color: 0x111111 #候選文字
     comment_text_color: 0x7b868c #提示
     hilited_back_color: 0xccd3d7da #標明編碼背景
-    hilited_candidate_back_color: 0xd3d7da #標明候選背景
+    hilited_candidate_back_color: 0xe4e4e4 #標明候選背景
     hilited_candidate_text_color: 0x000000 #標明候選文字
     hilited_comment_text_color: 0x000000 #標明提示
-    hilited_key_back_color: 0xd3d7da #標明按鍵背景
+    hilited_key_back_color: 0xe4e4e4 #標明按鍵背景
     hilited_key_symbol_color: 0x000000 #標明按鍵符號
     hilited_key_text_color: 0x000000 #標明按鍵文字
     hilited_off_key_back_color: 0xd3d7da #標明按鍵關閉狀態背景
@@ -158,12 +158,12 @@ preset_color_schemes:
     hilited_on_key_back_color: 0xd3d7da #標明按鍵打開狀態背景
     hilited_on_key_text_color: 0x000000 #標明按鍵打開狀態文字
     hilited_text_color: 0x23948e #標明編碼
-    key_back_color: 0xeceff1 #按鍵背景
+    key_back_color: 0xffffff #按鍵背景（对齐 Typeless：白键）
     #key_border_color: 0xeceff1 #按鍵邊框
-    key_symbol_color: 0x5f6b73 #按鍵符號
-    key_text_color: 0x37474f #按鍵文字
-    keyboard_back_color: 0xffffff #鍵盤背景
-    label_color: 0x000000 #標籤
+    key_symbol_color: 0x8a8a8a #按鍵符號
+    key_text_color: 0x111111 #按鍵文字
+    keyboard_back_color: 0xf1f1f1 #鍵盤背景（浅灰底）
+    label_color: 0x8a8a8a #標籤
     off_key_back_color: 0xd3d7da #按鍵關閉狀態背景
     off_key_text_color: 0x000000 #按鍵關閉狀態文字
     on_key_back_color: 0x23948e #按鍵打開狀態背景
@@ -875,13 +875,13 @@ preset_keys:
   VOLUME_UP: {label: 音量+, send: VOLUME_UP}
   VOLUME_MUTE: {label: 靜音, send: VOLUME_MUTE}
   # 編輯
-  Shift_L: {label: Shift, send: Shift_L, shift_lock: ascii_long}
+  Shift_L: {label: '⇧', send: Shift_L, shift_lock: ascii_long}
   Return: {label: enter_labels, send: Return}
   Return1: {label: Enter, send: Return }
   Return2: {label: 回车, send: Return }
   Hide: {label: 隱藏, send: BACK}
-  BackSpace: {label: 退格, repeatable: true, send: BackSpace}
-  space: {repeatable: false, functional: false, send: space}
+  BackSpace: {label: '⌫', repeatable: true, send: BackSpace}
+  space: {label: 空格, repeatable: false, functional: false, send: space}
   space1: {label: 空格, repeatable: false, functional: false, send: space}
   Escape: {label: Esc, send: Escape}
   Home: {label: 行首, send: Home}
@@ -913,14 +913,14 @@ preset_keys:
   CommitComment: {label: 編碼, send: Control+Shift+Return}
   DeleteCandidate: {label: 刪詞, send: Control+Delete}
   # rime狀態
-  Mode_switch: {toggle: ascii_mode, send: SWITCH_CHARSET, states: [ 中文, 西文 ]}
+  Mode_switch: {toggle: ascii_mode, send: SWITCH_CHARSET, states: [ 中, EN ]}
   Zenkaku_Hankaku: {toggle: full_shape, send: SWITCH_CHARSET, states: [ 半角, 全角 ]}
   Henkan: {toggle: simplification, send: SWITCH_CHARSET, states: [ 漢字, 汉字 ]}
   Charset_switch: {toggle: extended_charset, send: SWITCH_CHARSET, states: [ 常用, 增廣 ]}
   Punct_switch: {toggle: ascii_punct, send: SWITCH_CHARSET, states: [ 。，, ．， ]}
   #切换键盘
-  Keyboard_symbols: {label: 符號, send: Eisu_toggle, select: symbols}
-  Keyboard_number: {label: 數字, send: Eisu_toggle, select: number}
+  Keyboard_symbols: {label: '123', send: Eisu_toggle, select: symbols}
+  Keyboard_number: {label: '123', send: Eisu_toggle, select: number}
   Keyboard_mini: {label: 迷你, send: Eisu_toggle, select: mini}
   Keyboard_letter: {label: 字母, send: Eisu_toggle, select: default}
   Keyboard_default: {label: 返回, send: Eisu_toggle, select: .default}
@@ -1166,60 +1166,53 @@ preset_keyboards:
     - {click: BackSpace, width: 15}
     - {click: Return, composing: Return1, long_click: CommitComment, width: 15}
   qwerty:
-    name: 預設26鍵
-    author: "osfans <waxaca@163.com>"
+    name: 清爽26鍵
+    author: "Jack"
     ascii_mode: 0
-    columns: 10 #鍵盤列數，超過則自動換行，默認30列
+    columns: 10
     width: 10
     height: 55
     lock: true
-    key_symbol_offset_x: 0
-    key_symbol_offset_y: 0
-    key_text_offset_x: 0
-    key_text_offset_y: 0
-    key_hint_offset_x: 0
-    key_hint_offset_y: 0
-    key_press_offset_x: 2
-    key_press_offset_y: 2
     keys:
-    - {click: 'q', long_click: '!', swipe_up: 1}
-    - {click: 'w', long_click: '@', swipe_up: 2}
-    - {click: 'e', long_click: '#', swipe_up: 3}
-    - {click: 'r', long_click: '$', swipe_up: 4}
-    - {click: 't', long_click: '%', swipe_up: 5}
-    - {click: 'y', long_click: '^', swipe_up: 6}
-    - {click: 'u', long_click: '&', swipe_up: 7}
-    - {click: 'i', long_click: '*', swipe_up: 8}
-    - {click: 'o', long_click: '(){Left}', swipe_up: 9}
-    - {click: 'p', long_click: 'Hide', swipe_up: 0}
+    # 第一排
+    - {click: 'q'}
+    - {click: 'w'}
+    - {click: 'e'}
+    - {click: 'r'}
+    - {click: 't'}
+    - {click: 'y'}
+    - {click: 'u'}
+    - {click: 'i'}
+    - {click: 'o'}
+    - {click: 'p'}
+    # 第二排（左右各留半格，居中）
     - {width: 5}
-    - {click: 'a', long_click: select_all, swipe_left: Left, swipe_right: Right, swipe_up: Up, swipe_down: Down}
-    - {click: 's', long_click: '~', swipe_left: Home, swipe_right: End, swipe_up: Page_Up, swipe_down: Page_Down}
-    - {click: 'd', long_click: '-', swipe_down: '_'}
-    - {click: 'f', long_click: '+', swipe_down: '='}
-    - {click: 'g', long_click: '\', swipe_down: '|'}
-    - {click: 'h', long_click: '[]{Left}', swipe_left: '[', swipe_right: ']'}
-    - {click: 'j', long_click: '{}{Left}', swipe_left: '{', swipe_right: '}'}
-    - {click: 'k', long_click: ':'}
-    - {click: 'l', long_click: ';'}
+    - {click: 'a'}
+    - {click: 's'}
+    - {click: 'd'}
+    - {click: 'f'}
+    - {click: 'g'}
+    - {click: 'h'}
+    - {click: 'j'}
+    - {click: 'k'}
+    - {click: 'l'}
     - {width: 5}
+    # 第三排
     - {click: Shift_L, send_bindings: false, width: 15}
-    - {click: 'z', long_click: '`'}
-    - {click: 'x', long_click: cut}
-    - {click: 'c', long_click: copy}
-    - {click: 'v', long_click: paste}
-    - {click: 'b', long_click: Time, swipe_up: Date}
-    - {click: 'n', long_click: '"'}
-    - {click: 'm', long_click: "'"}
-    - {click: BackSpace, swipe_left: Escape, width: 15}
-    - {click: Mode_switch, long_click: Menu, width: 15}
-    - {click: Keyboard_symbols, long_click: Keyboard_number}
-    - {click: ',', long_click: '<'}
-    - {click: space, width: 20}
-    - {click: '.', long_click: '>'}
-    - {click: '/', long_click: '?'}
-    - {click: Voice, width: 10}
-    - {click: Return, composing: Return1, long_click: CommitComment, width: 15}
+    - {click: 'z'}
+    - {click: 'x'}
+    - {click: 'c'}
+    - {click: 'v'}
+    - {click: 'b'}
+    - {click: 'n'}
+    - {click: 'm'}
+    - {click: BackSpace, width: 15}
+    # 第四排：只留 123 / 中英 / 空格 / 语音 / 回车——对齐 Typeless 的极简底行
+    - {click: Keyboard_symbols, long_click: Keyboard_number, width: 12}
+    - {click: Mode_switch, long_click: Menu, width: 12}
+    - {click: space, width: 46}
+    - {click: Voice, width: 15}
+    - {click: Return, composing: Return1, width: 15}
   us_intl:
     name: 美式國際
     author: "Terry Tsang <archerindigo@gmail.com>"

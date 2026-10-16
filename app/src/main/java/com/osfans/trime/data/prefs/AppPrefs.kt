@@ -186,8 +186,9 @@ class AppPrefs(
         val useSoftCursor = switch(R.string.use_soft_cursor, USE_SOFT_CURSOR, true)
 
         val hideInputBar = switch(R.string.hide_input_bar, HIDE_INPUT_BAR, false)
-        val hideKeySymbol = switch(R.string.hide_key_symbol, HIDE_KEY_SYMBOL, false)
-        val hideKeyHint = switch(R.string.hide_key_hint, HIDE_KEY_HINT, false)
+        // 默认收起键上的小符号：出厂皮肤太挤，对齐 Typeless 的干净画面
+        val hideKeySymbol = switch(R.string.hide_key_symbol, HIDE_KEY_SYMBOL, true)
+        val hideKeyHint = switch(R.string.hide_key_hint, HIDE_KEY_HINT, true)
 
         val soundOnKeyPress = switch(R.string.sound_on_keypress, SOUND_ON_KEYPRESS, false)
         val soundVolume = int(
