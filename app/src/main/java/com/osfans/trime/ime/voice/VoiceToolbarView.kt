@@ -54,7 +54,7 @@ class VoiceToolbarView(
         TextView(context).apply {
             text = "JackVoice"
             setTextColor(TEXT)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER_VERTICAL
         }
@@ -120,7 +120,7 @@ class VoiceToolbarView(
         )
         addView(
             switcher,
-            LayoutParams(dp(142), dp(38)).apply {
+            LayoutParams(dp(142), dp(36)).apply {
                 gravity = Gravity.END or Gravity.CENTER_VERTICAL
                 marginEnd = dp(15)
             },
@@ -160,7 +160,7 @@ class VoiceToolbarView(
     fun setActive(tab: VoiceTab) {
         cells.forEachIndexed { i, cell ->
             val on = i == tab.ordinal
-            cell.background = if (on) rounded(ACTIVE, dp(15)) else null
+            cell.background = if (on) rounded(ACTIVE, dp(13)) else null
             (cell.getChildAt(0) as? TextView)?.setTextColor(if (on) TEXT else TEXT2)
         }
     }

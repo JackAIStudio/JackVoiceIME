@@ -923,10 +923,12 @@ preset_keys:
   Punct_switch: {toggle: ascii_punct, send: SWITCH_CHARSET, states: [ 。，, ．， ]}
   #切换键盘
   Keyboard_symbols: {label: '123', send: Eisu_toggle, select: symbols}
+  Keyboard_symbols2: {label: '#+=', send: Eisu_toggle, select: symbols2}
   Keyboard_number: {label: '123', send: Eisu_toggle, select: number}
   Keyboard_mini: {label: 迷你, send: Eisu_toggle, select: mini}
   Keyboard_letter: {label: 字母, send: Eisu_toggle, select: default}
   Keyboard_default: {label: 返回, send: Eisu_toggle, select: .default}
+  Keyboard_letters: {label: 拼音, send: Eisu_toggle, select: .default}
   Keyboard_switch: {label: 鍵盤, send: Eisu_toggle, select: .next}
   liquid_keyboard_switch: { label: 更多, send: FUNCTION, command: liquid_keyboard, option: "更多" }
   liquid_keyboard_exit: {label: 返回, send: FUNCTION, command: liquid_keyboard, option: "-1"}  #退出liquidkeyboard
@@ -1302,13 +1304,16 @@ preset_keyboards:
     - {click: space}
     - {click: BackSpace}
     - {click: Return}
+  # 数字/符号页 1 —— 照 Typeless 的 123 排的
   symbols:
-    name: 符號
-    author: "天真可愛的滿滿"
+    name: 数字与符号
+    author: "Jack"
     ascii_mode: 1
     width: 10
-    height: 44
+    height: 45
+    horizontal_gap: 9
     keys:
+    # 第一排：数字
     - {click: '1'}
     - {click: '2'}
     - {click: '3'}
@@ -1319,43 +1324,71 @@ preset_keyboards:
     - {click: '8'}
     - {click: '9'}
     - {click: '0'}
-    - {click: '~',long_click: '`'}
-    - {click: '!'}
-    - {click: '@'}
-    - {click: '#'}
-    - {click: '$'}
-    - {click: '￥'}
-    - {click: '%'}
-    - {click: '^'}
-    - {click: '&'}
-    - {click: '*'}
-    - {click: '(', long_click: '{'}
-    - {click: ')', long_click: '}'}
-    - {click: '[', long_click: '【'}
-    - {click: ']', long_click: '】'}
-    - {click: '「', long_click: '『'}
-    - {click: '」', long_click: '』'}
-    - {click: '、', ascii: '\', long_click: '|'}
-    - {click: '/', long_click: '√'}
+    # 第二排：半角符号
+    - {click: '-'}
+    - {click: '/'}
     - {click: ':'}
     - {click: ';'}
+    - {click: '('}
+    - {click: ')'}
+    - {click: '$'}
+    - {click: '@'}
+    - {click: '“'}
+    - {click: '”'}
+    # 第三排：#+= / 中文标点 / 退格
+    - {click: Keyboard_symbols2, width: 15}
+    - {click: '。', width: 11.67}
+    - {click: '，', width: 11.66}
+    - {click: '、', width: 11.67}
+    - {click: '？', width: 11.66}
+    - {click: '！', width: 11.67}
+    - {click: '.', width: 11.67}
+    - {click: BackSpace, width: 15}
+    # 第四排：回字母 / 空格 / 动作键
+    - {click: Keyboard_letters, width: 24}
+    - {click: space, width: 52}
+    - {click: CommitAction, width: 24}
+  # 数字/符号页 2 —— #+= 那一页
+  symbols2:
+    name: 更多符号
+    author: "Jack"
+    ascii_mode: 1
+    width: 10
+    height: 45
+    horizontal_gap: 9
+    keys:
+    - {click: '【'}
+    - {click: '】'}
+    - {click: '{'}
+    - {click: '}'}
+    - {click: '#'}
+    - {click: '%'}
+    - {click: '^'}
+    - {click: '*'}
     - {click: '+'}
-    - {click: '-', long_click: '_'}
     - {click: '='}
-    - {click: '〈', long_click: '《', ascii: '<'}
-    - {click: '〉', long_click: '》', ascii: '>'}
-    - {click: '“', ascii: '"', long_click: '‘'}
-    - {click: '”', ascii: "'", long_click: '’'}
-    - {click: '，', ascii: ',', long_click: one_hand_switch_1}
-    - {click: '？', ascii: '?', long_click: one_hand_switch_3}
-    - {click: BackSpace, long_click: Escape}
-    - {click: Keyboard_default, long_click: Menu, width: 15}
-    - {click: Keyboard_number, long_click: Color_switch}
-    - {click: Keyboard_mini, long_click: Theme_settings}
-    - {click: space, width: 30}
-    - {click: '。', ascii: '.'}
-    - {click: liquid_keyboard_switch, long_click: Delete}
-    - {click: Return, long_click: select_all, width: 15}
+    - {click: '_'}
+    - {click: '—'}
+    - {click: '\'}
+    - {click: '|'}
+    - {click: '~'}
+    - {click: '«'}
+    - {click: '»'}
+    - {click: '€'}
+    - {click: '&'}
+    - {click: '.'}
+    - {click: Keyboard_symbols, width: 15}
+    - {click: '…', width: 11.67}
+    - {click: '，', width: 11.66}
+    - {click: '^^', width: 11.67}
+    - {click: '？', width: 11.66}
+    - {click: '！', width: 11.67}
+    - {click: "'", width: 11.67}
+    - {click: BackSpace, width: 15}
+    - {click: Keyboard_letters, width: 24}
+    - {click: space, width: 52}
+    - {click: CommitAction, width: 24}
+
   bopomofo:
     name: 註音鍵盤
     author: "皛筱晓小笨鱼"
