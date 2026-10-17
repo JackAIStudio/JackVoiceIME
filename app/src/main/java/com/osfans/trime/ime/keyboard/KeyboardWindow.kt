@@ -90,6 +90,9 @@ class KeyboardWindow(di: DI) :
     private lateinit var keyArea: FrameLayout
     private lateinit var candidatePanel: CandidatePanelView
     private var lastCandidates: Array<CandidateProto> = emptyArray()
+
+    /** 当前候选条是英文补全给的（不是 Rime 的中文候选）。 */
+    private var englishMode = false
     private var candidatesExpanded = false
 
     private val toolbarHeightPx: Int get() = context.dp(VoiceToolbarView.HEIGHT_DP)
@@ -157,7 +160,12 @@ class KeyboardWindow(di: DI) :
                     bar.setActive(VoiceTab.English)
                 }
                 bar.onCandidatePick = { index ->
-                    rime.launchOnReady { it.selectCandidate(index, global = true) }
+                    val picked = lastCandidates.getOrNull(index)?.text
+                    if (englishMode && picked != null) {
+                        service.commitEnglishSuggestion(picked)
+                    } else {
+                        rime.launchOnReady { it.selectCandidate(index, global = true) }
+                    }
                 }
                 bar.onExpandTap = { toggleCandidatePanel() }
                 bar.onHideTap = { service.requestHideSelf(0) }
@@ -503,7 +511,26 @@ class KeyboardWindow(di: DI) :
      * 组合中：拼写单独一行浮在键盘上方（ComposingBarView），候选占顶栏那一行
      * （VoiceToolbarView 的 composingRow）。这里只负责记住候选、以及 ⌄ 展开整页。
      */
+    /** 英文候选：词表补全出来的，和 Rime 没关系，别被 Rime 的空候选顶掉。 */
+    fun showEnglishCandidates(items: List<String>) {
+        if (items.isEmpty() || !::toolbar.isInitialized) return
+        englishMode = true
+        lastCandidates = items.map { CandidateProto(it, "", "") }.toTypedArray()
+        toolbar.updateCandidates(lastCandidates, 0)
+        toolbar.setComposing(true)
+        if (candidatesExpanded && ::candidatePanel.isInitialized) candidatePanel.show(lastCandidates)
+    }
+
+    fun clearEnglishCandidates() {
+        if (!englishMode) return
+        englishMode = false
+        lastCandidates = emptyArray()
+        setComposingToolbar(false)
+        collapseCandidatePanel()
+    }
+
     override fun onCandidateListUpdate(data: Candidates.Bulk) {
+        if (englishMode) return
         if (data.candidates.isEmpty()) {
             lastCandidates = emptyArray()
             setComposingToolbar(false)
@@ -596,13 +623,13 @@ class KeyboardWindow(di: DI) :
 
     private fun syncToolbarActive() {
         if (!::toolbar.isInitialized) return
-        val status = rime.run { statusCached }
-        val english = status.schemaId == TrimeInputMethodService.EN_SCHEMA_ID || status.isAsciiMode
+        val english = rime.run { statusCached }.isAsciiMode
         toolbar.setActive(if (english) VoiceTab.English else VoiceTab.Pinyin)
     }
 
     override fun onDetached() {
         currentKeyboardView?.onDetach()
+        englishMode = false
         setComposingToolbar(false)
         collapseCandidatePanel()
     }

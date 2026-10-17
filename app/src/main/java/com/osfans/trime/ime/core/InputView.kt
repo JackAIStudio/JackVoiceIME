@@ -433,6 +433,20 @@ class InputView(
 
     private val locationInWindow = IntArray(2)
 
+    /** 英文补全候选（词表给的，不走 Rime）。 */
+    fun showEnglishSuggestions(
+        word: String,
+        items: List<String>,
+    ) {
+        composingBar.setComposingText(word)
+        keyboardWindow.showEnglishCandidates(items)
+    }
+
+    fun clearEnglishSuggestions() {
+        keyboardWindow.clearEnglishCandidates()
+        composingBar.setComposingText("")
+    }
+
     /** 行内预编辑变了：键盘上沿那条拼写跟着变（空 = 收起；英文模式不显示）。 */
     fun onComposingTextChanged(text: String) {
         composingBar.setComposingText(if (rime.run { statusCached }.isAsciiMode) "" else text)

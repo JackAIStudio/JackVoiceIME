@@ -49,6 +49,7 @@ import com.osfans.trime.data.theme.ThemeManager
 import com.osfans.trime.data.theme.ThemeScope
 import com.osfans.trime.ime.composition.CandidatesView
 import com.osfans.trime.ime.keyboard.InputFeedbackManager
+import com.osfans.trime.ime.voice.EnglishCompleter
 import com.osfans.trime.receiver.RimeIntentReceiver
 import com.osfans.trime.util.any
 import com.osfans.trime.util.findSectionFrom
@@ -71,10 +72,6 @@ import timber.log.Timber
 open class TrimeInputMethodService : LifecycleInputMethodService() {
 
     companion object {
-        /** 英文 Rime 方案（见 assets/shared/en_US.*）。 */
-        const val EN_SCHEMA_ID = "en_US"
-
-        private const val DEFAULT_CHINESE_SCHEMA = "luna_pinyin"
     }
     private lateinit var rime: RimeSession
     private val jobs = Channel<Job>(capacity = Channel.UNLIMITED)
@@ -495,6 +492,7 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
         cursorUpdateIndex += 1
         handleCursorUpdate(newSelStart, newSelEnd, candidatesStart, candidatesEnd, cursorUpdateIndex)
         inputView?.updateSelection(newSelStart, newSelEnd)
+        updateEnglishSuggestions()
     }
 
     private fun handleCursorUpdate(
@@ -990,28 +988,50 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
     }
 
     /**
-     * 拼 / EN：切的是 **Rime 方案**，不只是 ascii_mode。
-     *
-     * 英文有自己的方案（`en_US` + 10k 词库），跟 Typeless 一样打字母出候选词；
-     * 光翻 ascii_mode 的话中文方案只会把字母原样透传，永远没有候选。
+     * 拼 / EN：英文跟中文不一样，不需要「确认」，所以英文只是把 ascii_mode 打开、
+     * 字母直接上屏（输入框里不留组合下划线），候选由 [EnglishCompleter] 按前缀给。
      */
     fun switchInputLanguage(english: Boolean) {
-        val current = rime.run { statusCached.schemaId }
-        val target =
-            if (english) {
-                if (current != EN_SCHEMA_ID && current.isNotEmpty()) lastChineseSchema = current
-                EN_SCHEMA_ID
-            } else {
-                lastChineseSchema.ifEmpty { DEFAULT_CHINESE_SCHEMA }
-            }
-        if (current == target) return
-        postRimeJob {
-            clearComposition()
-            selectSchema(target)
-        }
+        postRimeJob { setRuntimeOption("ascii_mode", english) }
+        inputView?.clearEnglishSuggestions()
+        if (english) postOnMain { updateEnglishSuggestions() }
     }
 
-    private var lastChineseSchema = DEFAULT_CHINESE_SCHEMA
+    private fun postOnMain(block: () -> Unit) {
+        lifecycleScope.launch { block() }
+    }
+
+    /** 英文候选：读光标前那个单词，按词频前缀补全。 */
+    fun updateEnglishSuggestions() {
+        if (!rime.run { statusCached }.isAsciiMode) {
+            inputView?.clearEnglishSuggestions()
+            return
+        }
+        val ic = currentInputConnection ?: return
+        val before = runCatching { ic.getTextBeforeCursor(32, 0)?.toString() }.getOrNull().orEmpty()
+        val word = before.takeLastWhile { it.code < 128 && it.isLetter() }
+        if (word.isEmpty()) {
+            inputView?.clearEnglishSuggestions()
+            return
+        }
+        EnglishCompleter.ensureLoaded(this)
+        val items = EnglishCompleter.complete(word)
+        if (items.isEmpty()) {
+            inputView?.clearEnglishSuggestions()
+            return
+        }
+        inputView?.showEnglishSuggestions(word, items)
+    }
+
+    /** 点英文候选：把刚打的词干删掉，换成整词（不留下划线，所以只能这样补）。 */
+    fun commitEnglishSuggestion(word: String) {
+        val ic = currentInputConnection ?: return
+        val before = runCatching { ic.getTextBeforeCursor(32, 0)?.toString() }.getOrNull().orEmpty()
+        val stem = before.takeLastWhile { it.code < 128 && it.isLetter() }
+        if (stem.isNotEmpty()) ic.deleteSurroundingText(stem.length, 0)
+        ic.commitText(word, 1)
+        inputView?.clearEnglishSuggestions()
+    }
 
     fun clearTextSelection() {
         val ic = currentInputConnection ?: return
