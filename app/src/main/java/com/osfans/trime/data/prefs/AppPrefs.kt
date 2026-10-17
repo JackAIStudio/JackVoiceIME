@@ -101,7 +101,9 @@ class AppPrefs(
             const val PREFERRED_VOICE_INPUT = "preferred_voice_input"
         }
 
-        val inlinePreeditMode = enum(R.string.inline_preedit_mode, INLINE_PREEDIT_MODE, InlinePreeditMode.DISABLE)
+        // 拼音的字母直接进输入框（像 Typeless），不再浮一个预编辑小窗盖在宿主界面上面。
+        // 这样输入时看不到「re k he」那种糊成一片的悬浮字。
+        val inlinePreeditMode = enum(R.string.inline_preedit_mode, INLINE_PREEDIT_MODE, InlinePreeditMode.COMPOSING_TEXT)
         val asciiSwitchTips = switch(R.string.ascii_switch_tips, ASCII_SWITCH_TIPS, true)
         val inlineSuggestions = switch(R.string.inline_suggestions, INLINE_SUGGESTIONS, true)
 

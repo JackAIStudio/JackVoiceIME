@@ -14,9 +14,11 @@ import android.view.inputmethod.EditorInfo
 import android.widget.FrameLayout
 import androidx.core.content.ContextCompat
 import com.osfans.trime.R
+import com.osfans.trime.core.Candidates
 import com.osfans.trime.core.RimeMessage
 import com.osfans.trime.core.SchemaItem
 import com.osfans.trime.daemon.RimeSession
+import com.osfans.trime.daemon.launchOnReady
 import com.osfans.trime.data.theme.Theme
 import com.osfans.trime.data.theme.model.TextKeyboard
 import com.osfans.trime.ime.broadcast.EnterKeyDisplayDelegate
@@ -84,6 +86,9 @@ class KeyboardWindow(di: DI) :
 
     private val toolbarHeightPx: Int get() = context.dp(VoiceToolbarView.HEIGHT_DP)
 
+    /** 顶栏上方的留白。语音面板也用同一个值，两边切来切去胶囊不会上下跳。 */
+    private val toolbarTopMarginPx: Int get() = context.dp(VoiceToolbarView.TOP_MARGIN_DP)
+
     companion object : ResidentWindow.Key {
         lateinit var currentKeyboard: Keyboard
     }
@@ -133,6 +138,9 @@ class KeyboardWindow(di: DI) :
                     service.postRimeJob { setRuntimeOption("ascii_mode", true) }
                     bar.setActive(VoiceTab.English)
                 }
+                bar.onCandidatePick = { index ->
+                    rime.launchOnReady { it.selectCandidate(index, global = true) }
+                }
             }
 
         attachKeyboard(evalKeyboard(".default"))
@@ -141,6 +149,13 @@ class KeyboardWindow(di: DI) :
         // 后者会和 preedit 争高度，实测会把工具条顶出窗口上沿切掉一截。
         return LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
+            addView(
+                View(context),
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    toolbarTopMarginPx,
+                ),
+            )
             addView(
                 toolbar,
                 LinearLayout.LayoutParams(
@@ -158,9 +173,9 @@ class KeyboardWindow(di: DI) :
         }
     }
 
-    /** 键盘高度报给外面时要带上顶栏，否则 InputView 会少给这一截。 */
+    /** 键盘高度报给外面时要带上顶栏和它的留白，否则 InputView 会少给这一截。 */
     private fun reportHeight(keysHeight: Int) {
-        runBlocking { _currentKeyboardHeight.emit(keysHeight + toolbarHeightPx) }
+        runBlocking { _currentKeyboardHeight.emit(keysHeight + toolbarTopMarginPx + toolbarHeightPx) }
     }
 
     private fun detachCurrentView() {
@@ -343,6 +358,7 @@ class KeyboardWindow(di: DI) :
     }
 
     override fun onStartInput(info: EditorInfo) {
+        setComposingToolbar(false)
         val targetKeyboard =
             when (info.imeOptions and EditorInfo.IME_FLAG_FORCE_ASCII) {
                 EditorInfo.IME_FLAG_FORCE_ASCII -> ".ascii"
@@ -414,6 +430,25 @@ class KeyboardWindow(di: DI) :
         }
     }
 
+    /**
+     * 候选走顶栏那一行（对齐 Typeless）：有候选就顶替品牌 + 胶囊，没有就换回来。
+     * Trime 原来那条独立候选栏已经不再显示（见 InputView）。
+     */
+    override fun onCandidateListUpdate(data: Candidates.Bulk) {
+        if (data.candidates.isEmpty()) {
+            setComposingToolbar(false)
+        } else {
+            if (!::toolbar.isInitialized) return
+            toolbar.updateCandidates(data.candidates, data.highlighted)
+            setComposingToolbar(true)
+        }
+    }
+
+    private fun setComposingToolbar(composing: Boolean) {
+        if (!::toolbar.isInitialized) return
+        toolbar.setComposing(composing)
+    }
+
     override fun onSelectionUpdate(
         start: Int,
         end: Int,
@@ -468,5 +503,6 @@ class KeyboardWindow(di: DI) :
 
     override fun onDetached() {
         currentKeyboardView?.onDetach()
+        setComposingToolbar(false)
     }
 }

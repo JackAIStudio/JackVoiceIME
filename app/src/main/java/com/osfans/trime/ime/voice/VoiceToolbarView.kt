@@ -15,6 +15,7 @@ import android.view.View
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.osfans.trime.core.CandidateProto
 
 /** 顶栏切换器里的三个位置。 */
 enum class VoiceTab { Voice, Pinyin, English }
@@ -28,7 +29,8 @@ enum class VoiceTab { Voice, Pinyin, English }
  *   图标   20dp 五根竖条，条宽 0.115、间距 0.14（间距做宽了整颗图标就散）
  *   文字   15sp，选中 #111、未选 #8A8A8A
  *
- * 语音面板和打字键盘共用这一条，所以从面板切到键盘时胶囊不会消失。
+ * **这一行同时也是候选行**（Typeless 就是这样）：一输入中文，品牌和胶囊让位给候选词，
+ * 候选消失再换回来。所以键盘高度从头到尾不变，不会出现两条横栏叠在一起。
  */
 class VoiceToolbarView(
     context: Context,
@@ -36,6 +38,9 @@ class VoiceToolbarView(
     var onVoiceTap: (() -> Unit)? = null
     var onPinyinTap: (() -> Unit)? = null
     var onEnglishTap: (() -> Unit)? = null
+
+    /** 点候选词，参数是它在全量候选列表里的下标。 */
+    var onCandidatePick: ((Int) -> Unit)? = null
 
     private val brand =
         TextView(context).apply {
@@ -52,6 +57,24 @@ class VoiceToolbarView(
 
     private val cells = listOf(waveCell, pinyinCell, englishCell)
 
+    private val switcher =
+        LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            background = rounded(WHITE, dp(19))
+            setPadding(dp(3), dp(3), dp(3), dp(3))
+            addView(waveCell, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+            addView(pinyinCell, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+            addView(englishCell, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+        }
+
+    private val candidates =
+        CandidateStripView(context).apply {
+            visibility = GONE
+            onPick = { index -> onCandidatePick?.invoke(index) }
+        }
+
+    private var composing = false
+
     init {
         addView(
             brand,
@@ -60,22 +83,16 @@ class VoiceToolbarView(
                 marginStart = dp(18)
             },
         )
-
-        val switcher =
-            LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                background = rounded(WHITE, dp(19))
-                setPadding(dp(3), dp(3), dp(3), dp(3))
-                addView(waveCell, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
-                addView(pinyinCell, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
-                addView(englishCell, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
-            }
         addView(
             switcher,
             LayoutParams(dp(142), dp(38)).apply {
                 gravity = Gravity.END or Gravity.CENTER_VERTICAL
                 marginEnd = dp(15)
             },
+        )
+        addView(
+            candidates,
+            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT),
         )
         setActive(VoiceTab.Voice)
     }
@@ -86,6 +103,23 @@ class VoiceToolbarView(
             cell.background = if (on) rounded(ACTIVE, dp(15)) else null
             (cell.getChildAt(0) as? TextView)?.setTextColor(if (on) TEXT else TEXT2)
         }
+    }
+
+    /** 正在拼写：候选顶替品牌与胶囊。 */
+    fun setComposing(value: Boolean) {
+        if (composing == value) return
+        composing = value
+        brand.visibility = if (value) GONE else VISIBLE
+        switcher.visibility = if (value) GONE else VISIBLE
+        candidates.visibility = if (value) VISIBLE else GONE
+        if (!value) candidates.clear()
+    }
+
+    fun updateCandidates(
+        items: Array<CandidateProto>,
+        highlighted: Int,
+    ) {
+        candidates.update(items, highlighted)
     }
 
     private fun cell(
@@ -119,6 +153,9 @@ class VoiceToolbarView(
 
     companion object {
         const val HEIGHT_DP = 44
+
+        /** 顶栏距键盘区顶部的留白。语音面板和打字键盘用同一个值，切过去胶囊不会上下跳。 */
+        const val TOP_MARGIN_DP = 11
 
         private const val WHITE = 0xFFFFFFFF.toInt()
         private const val ACTIVE = 0xFFEFEFEF.toInt()

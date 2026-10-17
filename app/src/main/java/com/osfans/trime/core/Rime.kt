@@ -74,7 +74,14 @@ class Rime :
 
     private val lock = Mutex()
 
-    private val inlinePreeditMode by AppPrefs.defaultInstance().general.inlinePreeditMode
+    /**
+     * 拼音的字母**一律**走行内预编辑（直接进输入框），不看 Trime 那个老偏好。
+     *
+     * 老偏好默认是 DISABLE，于是拼写会画在一个悬浮小窗里、浮在宿主界面上——
+     * 实测多个片段会叠在一起（「re k he」那种），跟 Typeless 的行内拼写完全不同。
+     * 这个偏好是 Trime 的历史遗留项，我们不再对外提供（见设置页）。
+     */
+    private val inlinePreeditMode = InlinePreeditMode.COMPOSING_TEXT
     private val showAsciiSwitchTips by AppPrefs.defaultInstance().general.asciiSwitchTips
 
     private var asciiSwitchTipsJob: Job? = null

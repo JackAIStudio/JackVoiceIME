@@ -22,6 +22,7 @@ import androidx.lifecycle.lifecycleScope
 import com.osfans.trime.core.CompositionProto
 import com.osfans.trime.core.RimeMessage
 import com.osfans.trime.daemon.RimeSession
+import com.osfans.trime.daemon.launchOnReady
 import com.osfans.trime.data.prefs.AppPrefs
 import com.osfans.trime.data.theme.Theme
 import com.osfans.trime.data.theme.ThemeScope
@@ -157,15 +158,13 @@ class InputView(
     private val voicePanelHeightPx: Int by lazy { dp(VoicePanelView.PANEL_HEIGHT_DP) }
 
     /**
-     * 顶栏槽位归属：
-     *   语音面板        → 候选栏收起（面板自己带工具条）
-     *   打字键盘 + 输入中 → 候选栏（此时键盘自带的工具条还在其下方）
-     *   打字键盘 + 空闲   → 只留键盘自带的工具条
+     * 顶栏槽位：
+     *   候选条**不再显示**。候选已经并进键盘自己的顶栏那一行（见 VoiceToolbarView），
+     *   和 Typeless 一样——输入时候选顶替「品牌 + 胶囊」，不输入时换回来。
+     *   原来那条独立的候选栏既和顶栏叠印，候选字号（22sp）又撑破 28dp 的行高。
      */
     private fun applyBarVisibility(isVoice: Boolean) {
-        val composing = rime.run { statusCached.isComposing }
-        // 候选栏只在真正有候选时出现；空闲时那一行留给键盘自带的工具条。
-        inputBar.view.visibility = if (!isVoice && composing) View.VISIBLE else View.GONE
+        inputBar.view.visibility = View.GONE
         applyKeyboardViewHeight(isVoice)
     }
 
@@ -241,6 +240,11 @@ class InputView(
                         height = if (isVoice) voicePanelHeightPx else lastKeyboardHeightPx
                     }
                     applyKeyboardViewHeight(isVoice)
+                    if (isVoice) {
+                        // 从拼音键盘切过来时把没打完的拼写清掉：不清的话候选和预编辑会
+                        // 残留在语音面板下面透出来（面板顶栏是透明的）。
+                        rime.launchOnReady { it.clearComposition() }
+                    }
                 }
             },
         )

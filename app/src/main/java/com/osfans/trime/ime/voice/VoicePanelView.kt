@@ -72,7 +72,7 @@ class VoicePanelView(
     private val bottomBar =
         FrameLayout(context).apply {
             addView(
-                globeKey(onImeSwitchTap),
+                globeKey { onImeSwitchTap?.invoke() },
                 LayoutParams(dp(48), dp(48)).apply {
                     gravity = Gravity.BOTTOM or Gravity.START
                     marginStart = dp(22)
@@ -87,7 +87,7 @@ class VoicePanelView(
                 },
             )
             addView(
-                circleKey("@", GRAY_KEY, onAtTap),
+                circleKey("@", GRAY_KEY) { onAtTap?.invoke() },
                 LayoutParams(dp(48), dp(48)).apply {
                     gravity = Gravity.BOTTOM or Gravity.END
                     marginEnd = dp(18)
@@ -95,7 +95,7 @@ class VoicePanelView(
                 },
             )
             addView(
-                circleKey("\u232B", GRAY_KEY, onBackspaceTap),
+                circleKey("\u232B", GRAY_KEY) { onBackspaceTap?.invoke() },
                 LayoutParams(dp(48), dp(48)).apply {
                     gravity = Gravity.BOTTOM or Gravity.END
                     marginEnd = dp(18)
@@ -181,10 +181,17 @@ class VoicePanelView(
         hintView.visibility = GONE
     }
 
+    /**
+     * 底部圆形小键。
+     *
+     * 注意：回调必须**在点击那一刻**才去读属性，不能在构造时把值传进来——
+     * 这些回调是 `onCreateView` 之后才被 VoiceWindow 赋上的，构造时全是 null，
+     * 传值捕获会把它们永久钉死成 null（地球 / ⌫ / @ 三个键点了没反应就是这个原因）。
+     */
     private fun circleKey(
         glyph: String,
         color: Int,
-        onClick: (() -> Unit)?,
+        onClick: () -> Unit,
     ): TextView =
         TextView(context).apply {
             text = glyph
@@ -193,7 +200,7 @@ class VoicePanelView(
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f)
             background = circleDrawable(color)
             isClickable = true
-            setOnClickListener { onClick?.invoke() }
+            setOnClickListener { onClick() }
         }
 
     private fun pillKey(
@@ -210,12 +217,12 @@ class VoicePanelView(
             setOnClickListener { onClick() }
         }
 
-    /** 左下角那颗「切换输入法」：用画的地球，避免 emoji 字体的色块。 */
-    private fun globeKey(onClick: (() -> Unit)?): FrameLayout =
+    /** 左下角那颗「切换输入法」：用画的地球，避免 emoji 字体的色块。回调同上，点击时才读。 */
+    private fun globeKey(onClick: () -> Unit): FrameLayout =
         FrameLayout(context).apply {
             background = circleDrawable(WHITE_KEY)
             isClickable = true
-            setOnClickListener { onClick?.invoke() }
+            setOnClickListener { onClick() }
             addView(
                 GlobeGlyphView(context),
                 LayoutParams(dp(20), dp(20)).apply { gravity = Gravity.CENTER },
@@ -253,7 +260,7 @@ class VoicePanelView(
         private const val WHITE_KEY = 0xFFFFFFFF.toInt()
         private const val GRAY_KEY = 0xFFE4E4E4.toInt()
         private const val ICON_DARK = 0xFF3A3A3A.toInt()
-        private const val ACTION_LABEL = 0xFF9A9A9A.toInt()
+        private const val ACTION_LABEL = 0xFF111111.toInt()
         private const val TEXT_PRIMARY = 0xFF111111.toInt()
         private const val TEXT_SECONDARY = 0xFF8A8A8A.toInt()
 
