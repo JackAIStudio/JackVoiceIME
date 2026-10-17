@@ -10,6 +10,7 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
+import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
@@ -19,8 +20,10 @@ import android.widget.TextView
 import com.osfans.trime.ime.keyboard.GestureFrame
 import com.osfans.trime.ime.keyboard.InputFeedbackManager
 import kotlin.math.abs
+import kotlin.math.exp
 import kotlin.math.min
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 enum class VoiceState { Idle, Recording, Thinking }
 
@@ -29,7 +32,8 @@ enum class VoiceState { Idle, Recording, Thinking }
  *
  *   「点击说话」        中心 108dp
  *   中间那颗大按钮      中心 159dp（空闲胶囊 148×56 / 录音圆直径 123、光晕 150）
- *   「再次点击以完成」   中心 279dp（只在录音时出现）
+ *   流式预览气泡        顶端 242dp、最多两行（只在录音/处理时出现）
+ *   「再次点击以完成」   顶端 294dp（只在录音且还没有预览时出现）
  *   底部工具栏          左圆 x=45dp、右圆距右 42dp（⌫ 在 @ 上方 61dp）、中间胶囊 112×46
  *
  * 录音与处理态**整条底栏收起**——和 Typeless 一样，录音时画面只剩那颗大圆。
@@ -38,16 +42,20 @@ class VoicePanelView(
     context: Context,
 ) : FrameLayout(context) {
     var onOrbTap: (() -> Unit)? = null
+
     /** 左下角：弹出系统输入法选择器（初期还要用别的输入法打字）。 */
     var onImeSwitchTap: (() -> Unit)? = null
     var onBackspaceTap: (() -> Unit)? = null
     var onAtTap: (() -> Unit)? = null
     var onActionTap: (() -> Unit)? = null
+
     /** 顶部切换胶囊，语音面板与打字键盘共用同一个组件。 */
     val toolbar =
         VoiceToolbarView(context).apply {
             onVoiceTap = { /* 已经在语音面板上 */ }
         }
+
+    private var state = VoiceState.Idle
 
     private val statusView =
         TextView(context).apply {
@@ -59,8 +67,31 @@ class VoicePanelView(
     private val hintView =
         TextView(context).apply {
             setTextColor(TEXT_SECONDARY)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            gravity = Gravity.CENTER
+        }
+
+    /**
+     * 流式识别预览：说话时把一遍结果实时显示在面板里，用户不用等上屏才知道听到了什么。
+     *
+     * 位置在录音圆和「再次点击以完成」之间。只留两行，太长就**保留最后一段**——
+     * 边说话边滚，用户关心的是刚说出口的那几个字，不是开头。
+     */
+    private val previewView =
+        TextView(context).apply {
+            setTextColor(TEXT_PRIMARY)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             gravity = Gravity.CENTER
+            includeFontPadding = false
+            maxLines = 2
+            minHeight = dp(42)
+            ellipsize = TextUtils.TruncateAt.END
+            setLineSpacing(dp(1).toFloat(), 1f)
+            setPadding(dp(14), dp(5), dp(14), dp(5))
+            background = roundedDrawable(WHITE_KEY, dp(16))
+            // 气泡跟着文字走，但最多占屏幕宽度减去两侧留白，不能顶到屏幕边。
+            maxWidth = resources.displayMetrics.widthPixels - dp(80)
+            visibility = GONE
         }
 
     private val orb =
@@ -135,10 +166,17 @@ class VoicePanelView(
             },
         )
         addView(
-            hintView,
-            LayoutParams(LayoutParams.WRAP_CONTENT, dp(20)).apply {
+            previewView,
+            LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.WRAP_CONTENT).apply {
                 gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-                topMargin = dp(269)
+                topMargin = dp(242)
+            },
+        )
+        addView(
+            hintView,
+            LayoutParams(LayoutParams.WRAP_CONTENT, dp(18)).apply {
+                gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                topMargin = dp(294)
             },
         )
         addView(
@@ -152,6 +190,7 @@ class VoicePanelView(
     }
 
     fun setState(state: VoiceState) {
+        this.state = state
         orb.state = state
         when (state) {
             VoiceState.Idle -> {
@@ -159,6 +198,8 @@ class VoicePanelView(
                 statusView.text = "点击说话"
                 hintView.visibility = GONE
                 bottomBar.visibility = VISIBLE
+                clearPreview()
+                orb.level = 0f
             }
 
             VoiceState.Recording -> {
@@ -166,14 +207,46 @@ class VoicePanelView(
                 hintView.visibility = VISIBLE
                 hintView.text = "再次点击以完成"
                 bottomBar.visibility = GONE
+                // 新一次录音从空白开始，别把上一次的预览留在屏幕上。
+                clearPreview()
+                orb.level = 0f
             }
 
             VoiceState.Thinking -> {
                 statusView.visibility = GONE
                 hintView.visibility = GONE
                 bottomBar.visibility = GONE
+                orb.level = 0f
             }
         }
+    }
+
+    /** 实时音量（0..1）。只有录音时波形才跟着走，其他状态一律落地。 */
+    fun setLevel(level: Float) {
+        orb.level = if (state == VoiceState.Recording) level.coerceIn(0f, 1f) else 0f
+    }
+
+    /** 流式识别的一段预览。空串就收起气泡；太长的只留最后一段。 */
+    fun setPreview(text: String) {
+        if (state == VoiceState.Idle) return
+        val trimmed = text.trim()
+        val shown =
+            if (trimmed.length > PREVIEW_MAX_CHARS) {
+                "…" + trimmed.takeLast(PREVIEW_MAX_CHARS - 1)
+            } else {
+                trimmed
+            }
+        previewView.text = shown
+        val visible = shown.isNotEmpty()
+        previewView.visibility = if (visible) VISIBLE else GONE
+        // 有实时文字时把「再次点击以完成」让出来：两行预览更重要，而且这一格
+        // 就在它正上方，同时显示会挤在一起。
+        if (visible) hintView.visibility = GONE
+    }
+
+    private fun clearPreview() {
+        previewView.text = ""
+        previewView.visibility = GONE
     }
 
     fun setActionLabel(label: String) {
@@ -184,6 +257,7 @@ class VoicePanelView(
         statusView.visibility = VISIBLE
         statusView.text = message
         hintView.visibility = GONE
+        clearPreview()
     }
 
     /**
@@ -197,36 +271,34 @@ class VoicePanelView(
         glyph: String,
         color: Int,
         onClick: () -> Unit,
-    ): TextView =
-        TextView(context).apply {
-            text = glyph
-            gravity = Gravity.CENTER
-            setTextColor(ICON_DARK)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f)
-            background = circleDrawable(color)
-            isClickable = true
-            setOnClickListener {
-                InputFeedbackManager.keyPressVibrate(this)
-                onClick()
-            }
+    ): TextView = TextView(context).apply {
+        text = glyph
+        gravity = Gravity.CENTER
+        setTextColor(ICON_DARK)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f)
+        background = circleDrawable(color)
+        isClickable = true
+        setOnClickListener {
+            InputFeedbackManager.keyPressVibrate(this)
+            onClick()
         }
+    }
 
     private fun pillKey(
         label: String,
         onClick: () -> Unit,
-    ): TextView =
-        TextView(context).apply {
-            text = label
-            gravity = Gravity.CENTER
-            setTextColor(ACTION_LABEL)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
-            background = roundedDrawable(WHITE_KEY, dp(23))
-            isClickable = true
-            setOnClickListener {
-                InputFeedbackManager.keyPressVibrate(this)
-                onClick()
-            }
+    ): TextView = TextView(context).apply {
+        text = label
+        gravity = Gravity.CENTER
+        setTextColor(ACTION_LABEL)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+        background = roundedDrawable(WHITE_KEY, dp(23))
+        isClickable = true
+        setOnClickListener {
+            InputFeedbackManager.keyPressVibrate(this)
+            onClick()
         }
+    }
 
     /**
      * 按住能连删的圆形键。
@@ -240,43 +312,40 @@ class VoicePanelView(
         glyph: String,
         color: Int,
         onRepeat: () -> Unit,
-    ): FrameLayout =
-        GestureFrame(context).apply {
-            background = circleDrawable(color)
-            isClickable = true
-            isRepeatable = true
-            onClick = onRepeat
-            addView(
-                TextView(context).apply {
-                    text = glyph
-                    gravity = Gravity.CENTER
-                    setTextColor(ICON_DARK)
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f)
-                },
-                LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT),
-            )
-        }
+    ): FrameLayout = GestureFrame(context).apply {
+        background = circleDrawable(color)
+        isClickable = true
+        isRepeatable = true
+        onClick = onRepeat
+        addView(
+            TextView(context).apply {
+                text = glyph
+                gravity = Gravity.CENTER
+                setTextColor(ICON_DARK)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f)
+            },
+            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT),
+        )
+    }
 
     /** 左下角那颗「切换输入法」：用画的地球，避免 emoji 字体的色块。回调同上，点击时才读。 */
-    private fun globeKey(onClick: () -> Unit): FrameLayout =
-        FrameLayout(context).apply {
-            background = circleDrawable(WHITE_KEY)
-            isClickable = true
-            setOnClickListener {
-                InputFeedbackManager.keyPressVibrate(this)
-                onClick()
-            }
-            addView(
-                GlobeGlyphView(context),
-                LayoutParams(dp(20), dp(20)).apply { gravity = Gravity.CENTER },
-            )
+    private fun globeKey(onClick: () -> Unit): FrameLayout = FrameLayout(context).apply {
+        background = circleDrawable(WHITE_KEY)
+        isClickable = true
+        setOnClickListener {
+            InputFeedbackManager.keyPressVibrate(this)
+            onClick()
         }
+        addView(
+            GlobeGlyphView(context),
+            LayoutParams(dp(20), dp(20)).apply { gravity = Gravity.CENTER },
+        )
+    }
 
-    private fun circleDrawable(color: Int) =
-        android.graphics.drawable.GradientDrawable().apply {
-            shape = android.graphics.drawable.GradientDrawable.OVAL
-            setColor(color)
-        }
+    private fun circleDrawable(color: Int) = android.graphics.drawable.GradientDrawable().apply {
+        shape = android.graphics.drawable.GradientDrawable.OVAL
+        setColor(color)
+    }
 
     private fun roundedDrawable(
         color: Int,
@@ -299,6 +368,9 @@ class VoicePanelView(
         /** 大按钮的中心距面板顶部。 */
         private const val ORB_CENTER = 159
 
+        /** 预览气泡最多留多少字；再多就取最后一段，两行放得下。 */
+        private const val PREVIEW_MAX_CHARS = 30
+
         private const val BACKGROUND = 0xFFF1F1F1.toInt()
         private const val WHITE_KEY = 0xFFFFFFFF.toInt()
         private const val GRAY_KEY = 0xFFE4E4E4.toInt()
@@ -306,7 +378,6 @@ class VoicePanelView(
         private const val ACTION_LABEL = 0xFF111111.toInt()
         private const val TEXT_PRIMARY = 0xFF111111.toInt()
         private const val TEXT_SECONDARY = 0xFF8A8A8A.toInt()
-
     }
 }
 
@@ -325,11 +396,26 @@ class VoiceOrbView(
     var state: VoiceState = VoiceState.Idle
         set(value) {
             field = value
-            if (value == VoiceState.Recording) startAt = System.currentTimeMillis()
+            if (value == VoiceState.Recording) {
+                startAt = System.currentTimeMillis()
+                displayedLevel = 0f
+                lastFrameNanos = 0L
+            }
             invalidate()
         }
 
+    /** 实时音量 0..1，由 [VoicePanelView.setLevel] 喂进来。 */
+    var level: Float = 0f
+        set(value) {
+            field = value.coerceIn(0f, 1f)
+            if (state == VoiceState.Recording) invalidate()
+        }
+
     private var startAt = 0L
+
+    /** 画出来的音量：对收到的 level 做快起慢落，10Hz 的采样看起来才不跳。 */
+    private var displayedLevel = 0f
+    private var lastFrameNanos = 0L
 
     private val fill =
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
@@ -370,7 +456,7 @@ class VoiceOrbView(
         val unit = min(width, height).toFloat()
         when (state) {
             VoiceState.Idle -> drawPill(canvas, cx, cy, unit, PILL_W, PILL_H, true)
-            VoiceState.Recording -> drawRecording(canvas, cx, cy, unit)
+            VoiceState.Recording -> drawRecording(canvas, cx, cy)
             VoiceState.Thinking -> drawPill(canvas, cx, cy, unit, PILL_W, PILL_H, false)
         }
     }
@@ -450,27 +536,45 @@ class VoiceOrbView(
         canvas: Canvas,
         cx: Float,
         cy: Float,
-        unit: Float,
     ) {
+        // 快起慢落：说话时 50ms 内顶起来，停嘴后慢慢落回小点。
+        val now = System.nanoTime()
+        val dt =
+            if (lastFrameNanos == 0L) {
+                1f / 60f
+            } else {
+                ((now - lastFrameNanos) / 1_000_000_000f).coerceIn(0f, 0.1f)
+            }
+        lastFrameNanos = now
+        val speed = if (level > displayedLevel) ATTACK_PER_SEC else RELEASE_PER_SEC
+        displayedLevel += (level - displayedLevel) * (1f - exp(-speed * dt))
+        if (abs(level - displayedLevel) < 0.004f) displayedLevel = level
+
         val r = dp(CIRCLE_R)
-        canvas.drawCircle(cx, cy, dp(CIRCLE_R + HALO_GAP), halo)
+        // 开方只影响观感：正常说话也明显能顶起来，静音仍然是 0。
+        val visual = sqrt(displayedLevel)
+        canvas.drawCircle(cx, cy, dp(CIRCLE_R + HALO_GAP) + dp(3f) * visual, halo)
         fill.color = ORB
         canvas.drawCircle(cx, cy, r, fill)
 
         val t = (System.currentTimeMillis() - startAt) / 1000f
         val gap = dp(14f)
         val maxH = dp(64f)
+        val minH = dp(5f)
         val weights = floatArrayOf(0.42f, 0.72f, 1f, 0.66f, 0.38f)
         white.strokeWidth = dp(7f)
         white.strokeCap = Paint.Cap.ROUND
         for (i in weights.indices) {
-            val phase = sin(t * 6.0 + i * 0.9).toFloat()
-            val scale = 0.45f + 0.55f * abs(phase)
-            val bh = maxH * weights[i] * scale
+            // 起伏只在有声时出现；静音时 displayedLevel = 0，五根都停在最小高度，
+            // 不会像以前那样不管说不说话都自顾自地跳。
+            val wobble = 1f + 0.16f * sin(t * 7.0 + i * 1.15).toFloat() * visual
+            val full = maxH * weights[i] * wobble
+            val bh = minH + (full - minH) * visual
             val x = cx + (i - 2) * gap
             canvas.drawLine(x, cy - bh / 2, x, cy + bh / 2, white)
         }
-        postInvalidateOnAnimation()
+        // 有声音（或正在回落）才继续要帧；静音时停在静止的小点上，不白烧电。
+        if (level > 0.001f || displayedLevel > 0.001f) postInvalidateOnAnimation()
     }
 
     companion object {
@@ -481,6 +585,10 @@ class VoiceOrbView(
         /** 录音黑圆直径 128dp，外面套一圈 14dp 的光晕。 */
         private const val CIRCLE_R = 64f
         private const val HALO_GAP = 14f
+
+        /** 音量的起落速度（每秒逼近比例）。起得快才跟得上说话，落得慢一点不闪。 */
+        private const val ATTACK_PER_SEC = 22f
+        private const val RELEASE_PER_SEC = 5f
 
         private const val ORB = 0xFF111111.toInt()
         private const val HALO = 0xFFE8E8E8.toInt()

@@ -41,6 +41,8 @@ import com.osfans.trime.ime.popup.PopupDelegate
 import com.osfans.trime.ime.symbol.LiquidWindow
 import com.osfans.trime.ime.voice.ComposingBarView
 import com.osfans.trime.ime.voice.VoicePanelView
+import com.osfans.trime.ime.voice.VoicePrefs
+import com.osfans.trime.ime.voice.VoiceTab
 import com.osfans.trime.ime.voice.VoiceWindow
 import com.osfans.trime.ime.window.BoardWindow
 import com.osfans.trime.ime.window.BoardWindowManager
@@ -411,9 +413,19 @@ class InputView(
         composingBar.setComposingText("")
         broadcaster.onStartInput(info)
         if (!restarting) {
-            // 对标 Typeless：语音面板就是**主键盘**——点进任何输入框先看到「点击说话」。
-            // 要打字时按面板左下角的键盘键切到拼音键盘；键盘右下角的「语音」键切回来。
-            windowManager.attachWindow(voiceWindow)
+            // 记住上一次停在哪个模块：语音 / 拼音 / EN。第一次用默认语音面板
+            // （对标 Typeless：语音面板就是主键盘），之后用户选过什么就回什么。
+            val lastTab = VoicePrefs.lastTab(service)
+            when (lastTab) {
+                VoiceTab.Pinyin, VoiceTab.English -> {
+                    windowManager.attachWindow(KeyboardWindow)
+                    // 键盘窗口已经按输入框类型选好布局了；这里只把语言恢复成上次那个，
+                    // 密码/邮箱/数字这类强制 ASCII 的输入框会被它自己挡住。
+                    keyboardWindow.restorePreferredLanguage(lastTab)
+                }
+
+                else -> windowManager.attachWindow(voiceWindow)
+            }
         }
     }
 

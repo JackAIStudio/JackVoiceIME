@@ -19,12 +19,12 @@ object VoicePrefs {
     const val KEY_API_KEY = "voice_api_key"
     const val KEY_RESOURCE_ID = "voice_resource_id"
     const val KEY_HOTWORDS_ENABLED = "voice_hotwords_enabled"
+    const val KEY_LAST_TAB = "voice_last_tab"
 
     fun apiKey(ctx: Context): String = prefs(ctx).getString(KEY_API_KEY, "").orEmpty().trim()
 
-    fun resourceId(ctx: Context): String =
-        prefs(ctx).getString(KEY_RESOURCE_ID, "").orEmpty().trim()
-            .ifEmpty { VolcProtocol.DEFAULT_RESOURCE_ID }
+    fun resourceId(ctx: Context): String = prefs(ctx).getString(KEY_RESOURCE_ID, "").orEmpty().trim()
+        .ifEmpty { VolcProtocol.DEFAULT_RESOURCE_ID }
 
     fun hotwordsEnabled(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_HOTWORDS_ENABLED, true)
 
@@ -37,6 +37,27 @@ object VoicePrefs {
         ctx: Context,
         value: Boolean,
     ) = prefs(ctx).edit { putBoolean(KEY_HOTWORDS_ENABLED, value) }
+
+    /**
+     * 用户上一次停在哪个模块（语音 / 拼音 / EN）。
+     *
+     * 每次展开键盘先回到这一屏，而不是永远弹语音面板；「收起键盘」不算一次选择，
+     * 所以 [VoiceTab.Hide] 永远不落盘。默认仍是语音——这是这个输入法的主键盘。
+     */
+    fun lastTab(ctx: Context): VoiceTab {
+        val name = prefs(ctx).getString(KEY_LAST_TAB, null) ?: return VoiceTab.Voice
+        return VoiceTab.entries.firstOrNull { it.name == name && it != VoiceTab.Hide }
+            ?: VoiceTab.Voice
+    }
+
+    fun setLastTab(
+        ctx: Context,
+        tab: VoiceTab,
+    ) {
+        if (tab == VoiceTab.Hide) return
+        if (lastTab(ctx) == tab) return
+        prefs(ctx).edit { putString(KEY_LAST_TAB, tab.name) }
+    }
 
     private fun prefs(ctx: Context) = PreferenceManager.getDefaultSharedPreferences(ctx)
 }

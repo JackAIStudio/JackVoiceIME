@@ -6,9 +6,9 @@
 package com.osfans.trime.ime.voice
 
 import android.content.Context
-import com.osfans.trime.util.appContext
 import android.os.Handler
 import android.os.Looper
+import com.osfans.trime.util.appContext
 import timber.log.Timber
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -29,6 +29,9 @@ object VoiceEngine {
         fun onFinal(text: String)
 
         fun onError(message: String)
+
+        /** 实时音量（0..1）。静音必须是 0，波形靠它驱动，没声音就不该动。 */
+        fun onLevel(level: Float)
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -102,6 +105,7 @@ object VoiceEngine {
             VoiceRecorder(
                 onChunk = { client.feed(it) },
                 onError = { finishWithError(it) },
+                onLevel = { level -> post { listener?.onLevel(level) } },
             )
         if (!rec.start()) {
             client.cancel()
@@ -120,6 +124,8 @@ object VoiceEngine {
         recorder?.stop()
         recorder = null
         asr?.stop()
+        // 停录这一刻波形就该落地，别等终稿或超时。
+        post { listener?.onLevel(0f) }
         main.postDelayed({ finish(final = true) }, FINAL_TIMEOUT_MS)
     }
 
@@ -133,6 +139,7 @@ object VoiceEngine {
         asr = null
         result.setLength(0)
         main.removeCallbacksAndMessages(null)
+        post { listener?.onLevel(0f) }
     }
 
     private fun finish(final: Boolean) {
@@ -150,6 +157,7 @@ object VoiceEngine {
         if (text.isNotEmpty()) {
             runCatching { VoiceHistory.append(appContext, text, duration) }
         }
+        post { listener?.onLevel(0f) }
         post { listener?.onFinal(text) }
     }
 
@@ -162,6 +170,7 @@ object VoiceEngine {
         asr = null
         result.setLength(0)
         isRecording = false
+        post { listener?.onLevel(0f) }
         post { listener?.onError(message) }
     }
 

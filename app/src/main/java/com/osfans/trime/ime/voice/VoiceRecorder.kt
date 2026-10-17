@@ -23,12 +23,17 @@ import kotlin.concurrent.thread
 class VoiceRecorder(
     private val onChunk: (ByteArray) -> Unit,
     private val onError: (String) -> Unit,
+    /** 每块 PCM 的音量（0..1），录音线程回调；波形靠它，不能再用假动画。 */
+    private val onLevel: (Float) -> Unit = {},
 ) {
     @Volatile
     private var running = false
 
     private var record: AudioRecord? = null
     private var worker: Thread? = null
+
+    /** 每次录音自己跟一条底噪线：安静时必须是 0，不能让底噪把柱子顶起来。 */
+    private val levelMeter = VoiceLevel()
 
     val isRecording: Boolean get() = running
 
@@ -80,7 +85,12 @@ class VoiceRecorder(
                 while (running) {
                     val n = rec.read(buf, 0, buf.size)
                     when {
-                        n > 0 -> onChunk(buf.copyOf(n))
+                        n > 0 -> {
+                            // 先算音量再送识别：两块互不影响，但顺序上 UI 更跟手。
+                            onLevel(levelMeter.fromPcm(buf, n))
+                            onChunk(buf.copyOf(n))
+                        }
+
                         n < 0 -> {
                             if (running) {
                                 Timber.e("AudioRecord.read 返回 $n")

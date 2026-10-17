@@ -57,11 +57,11 @@ class VoiceWindow(di: DI) :
         // 顶部切换胶囊的「拼」/「EN」：切到拼音/英文键盘，并同步 Rime 的 ascii_mode
         view.toolbar.onPinyinTap = {
             service.switchInputLanguage(false)
-            switchToKeyboard()
+            switchToKeyboard(VoiceTab.Pinyin)
         }
         view.toolbar.onEnglishTap = {
             service.switchInputLanguage(true)
-            switchToKeyboard()
+            switchToKeyboard(VoiceTab.English)
         }
         panel = view
         return view
@@ -72,12 +72,15 @@ class VoiceWindow(di: DI) :
         setState(VoiceState.Idle)
         panel?.setActionLabel(actionLabel())
         panel?.toolbar?.setActive(VoiceTab.Voice)
+        // 记住用户停在这一屏：下次展开键盘先回到语音面板（默认也是它）。
+        VoicePrefs.setLastTab(context, VoiceTab.Voice)
     }
 
     override fun onDetached() {
         VoiceEngine.setListener(null)
         VoiceEngine.cancel()
         VoiceCaptureService.stop(service)
+        panel?.setLevel(0f)
         setState(VoiceState.Idle)
     }
 
@@ -111,11 +114,19 @@ class VoiceWindow(di: DI) :
 
     // ── VoiceEngine 回调（引擎保证在主线程）────────────────────────────────
 
-    override fun onPartial(text: String) = Unit
+    override fun onPartial(text: String) {
+        // 流式结果实时显示在面板里，不用等终稿上屏才看到听到了什么。
+        panel?.setPreview(text)
+    }
+
+    override fun onLevel(level: Float) {
+        panel?.setLevel(level)
+    }
 
     override fun onFinal(text: String) {
         service.lifecycleScope.launch {
             VoiceCaptureService.stop(service)
+            panel?.setPreview("")
             val processed = if (text.isBlank()) "" else PostProcessor.process(text, service)
             if (processed.isNotBlank()) {
                 service.commitText(processed)
@@ -129,6 +140,7 @@ class VoiceWindow(di: DI) :
     override fun onError(message: String) {
         service.lifecycleScope.launch {
             VoiceCaptureService.stop(service)
+            panel?.setPreview("")
             panel?.showMessage("识别失败：$message")
             state = VoiceState.Idle
             delay(2600)
@@ -138,7 +150,6 @@ class VoiceWindow(di: DI) :
 
     // ── 底栏与顶栏 ────────────────────────────────────────────────────────
 
-    /** ascii 为 null 表示只是回键盘，不动中英模式。 */
     /** 弹出系统输入法选择器——这就是那颗地球键该干的事。 */
     private fun showImePicker() {
         runCatching {
@@ -147,10 +158,13 @@ class VoiceWindow(di: DI) :
         }
     }
 
-    private fun switchToKeyboard() {
+    private fun switchToKeyboard(tab: VoiceTab? = null) {
         VoiceEngine.cancel()
         VoiceCaptureService.stop(service)
         windowManager.attachWindow(keyboardWindow)
+        // attach 时 Rime 的 ascii_mode 还没切完，键盘窗口会先按旧值记一次；
+        // 这里在 attach 之后用用户真正点的目标盖回去，下次展开才是对的。
+        tab?.let { VoicePrefs.setLastTab(context, it) }
     }
 
     private fun actionLabel(): String {

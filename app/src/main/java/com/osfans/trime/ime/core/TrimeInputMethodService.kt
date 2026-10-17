@@ -72,6 +72,8 @@ import timber.log.Timber
 open class TrimeInputMethodService : LifecycleInputMethodService() {
 
     companion object {
+        /** 选完英文候选后的抑制窗口，用来盖住编辑器回读文本的延迟。 */
+        private const val COMMIT_SUPPRESS_MS = 600L
     }
     private lateinit var rime: RimeSession
     private val jobs = Channel<Job>(capacity = Channel.UNLIMITED)
@@ -98,6 +100,16 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
     private var lastCommittedText: String = ""
 
     private var composingText: String = ""
+
+    /**
+     * 刚刚由用户从候选里选定的英文整词。
+     *
+     * 选完必须回到「品牌 + 胶囊」。不能提交后立刻按新文本重算候选：
+     * 光标前正好是这个整词本身，`complete(word)` 会把它自己当候选弹回来，
+     * 用户再点一次还是同一个词——看起来就是点了 testing 永远回不到原位。
+     */
+    private var justCommittedEnglishWord: String? = null
+    private var justCommittedEnglishAt = 0L
 
     /** 行内预编辑的当前拼写（拼音），键盘顶栏左边会显示它。 */
     val currentComposingText: String get() = composingText
@@ -591,6 +603,7 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
     ) {
         composingText = ""
         commitBeforeAction = false
+        justCommittedEnglishWord = null
         Timber.d("onStartInput: restarting=$restarting")
         val isNullType = attribute.inputType and InputType.TYPE_MASK_CLASS == InputType.TYPE_NULL
         postRimeJob {
@@ -994,6 +1007,7 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
     fun switchInputLanguage(english: Boolean) {
         // 切语言时先清掉正在拼的中文组合：不清的话 ascii 切过去以后，
         // 输入框里那截带下划线的拼音还留着，接着打的英文字母会接在它后面。
+        justCommittedEnglishWord = null
         postRimeJob {
             clearComposition()
             setRuntimeOption("ascii_mode", english)
@@ -1021,6 +1035,19 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
         val ic = currentInputConnection ?: return
         val before = runCatching { ic.getTextBeforeCursor(32, 0)?.toString() }.getOrNull().orEmpty()
         val word = before.takeLastWhile { it.code < 128 && it.isLetter() }
+        val committed = justCommittedEnglishWord
+        if (committed != null) {
+            // 提交后的第一次选区回调可能还读到删剩的词干（编辑器回读有延迟），
+            // 所以「整词本身」和短时间内的「它的前缀」都不重新弹候选。
+            val recent = SystemClock.uptimeMillis() - justCommittedEnglishAt < COMMIT_SUPPRESS_MS
+            if (word.equals(committed, ignoreCase = true) ||
+                (recent && word.isNotEmpty() && committed.startsWith(word, ignoreCase = true))
+            ) {
+                inputView?.clearEnglishSuggestions()
+                return
+            }
+            justCommittedEnglishWord = null
+        }
         if (word.isEmpty()) {
             inputView?.clearEnglishSuggestions()
             return
@@ -1037,9 +1064,9 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
     /**
      * 点英文候选：把刚打的词干删掉，换成整词（不留下划线，所以只能这样补）。
      *
-     * 提交后**不要先清空候选**——清空会把顶栏退回「JackVoice + 胶囊」，
-     * 紧接着 [onUpdateSelection] 又按新文本建回来，看起来就是键盘闪了一下。
-     * 直接把候选按提交后的文本重算：有词就原地换候选，没词才收起。
+     * 提交后**直接收起候选**，回到「品牌 + 胶囊」那一屏；不能马上按新文本重算，
+     * 否则光标前的整词会被当成它自己的补全候选，点一次弹一次，陷入死循环。
+     * 后续 [onUpdateSelection] 的刷新由 [justCommittedEnglishWord] 压住。
      */
     fun commitEnglishSuggestion(word: String) {
         val ic = currentInputConnection ?: return
@@ -1054,7 +1081,9 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
         } finally {
             ic.endBatchEdit()
         }
-        updateEnglishSuggestions()
+        justCommittedEnglishWord = word
+        justCommittedEnglishAt = SystemClock.uptimeMillis()
+        inputView?.clearEnglishSuggestions()
     }
 
     fun clearTextSelection() {
