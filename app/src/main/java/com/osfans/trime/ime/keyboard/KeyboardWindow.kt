@@ -14,6 +14,7 @@ import android.view.inputmethod.EditorInfo
 import android.widget.FrameLayout
 import androidx.core.content.ContextCompat
 import com.osfans.trime.R
+import com.osfans.trime.core.CandidateProto
 import com.osfans.trime.core.Candidates
 import com.osfans.trime.core.RimeMessage
 import com.osfans.trime.core.SchemaItem
@@ -26,6 +27,7 @@ import com.osfans.trime.ime.broadcast.InputBroadcastReceiver
 import com.osfans.trime.ime.core.TrimeInputMethodService
 import com.osfans.trime.ime.keyboard.KeyboardPrefs.isLandscapeMode
 import com.osfans.trime.ime.popup.PopupDelegate
+import com.osfans.trime.ime.voice.CandidatePanelView
 import com.osfans.trime.ime.voice.VoiceTab
 import com.osfans.trime.ime.window.BoardWindowManager
 import com.osfans.trime.ime.voice.VoiceToolbarView
@@ -84,6 +86,12 @@ class KeyboardWindow(di: DI) :
     /** 键盘自带顶栏：品牌 + 🎙|拼|EN 胶囊。整块键盘 = 顶栏 + 按键。 */
     private lateinit var toolbar: VoiceToolbarView
 
+    /** 按键区（含左右留白），整页候选面板叠在它上面。 */
+    private lateinit var keyArea: FrameLayout
+    private lateinit var candidatePanel: CandidatePanelView
+    private var lastCandidates: Array<CandidateProto> = emptyArray()
+    private var candidatesExpanded = false
+
     private val toolbarHeightPx: Int get() = context.dp(VoiceToolbarView.HEIGHT_DP)
 
     /** 顶栏上方的留白。语音面板也用同一个值，两边切来切去胶囊不会上下跳。 */
@@ -91,6 +99,15 @@ class KeyboardWindow(di: DI) :
 
     companion object : ResidentWindow.Key {
         lateinit var currentKeyboard: Keyboard
+
+        /** 顶栏与按键之间的间隔（Typeless 那一条透气缝）。 */
+        private const val TOOLBAR_GAP_DP = 9
+
+        /** 按键与屏幕底之间给手势条让的位。 */
+        private const val BOTTOM_GAP_DP = 20
+
+        /** 按键区左右留白，Typeless 的键不贴着屏幕边。 */
+        private const val KEY_SIDE_PADDING_DP = 6
     }
 
     override val key: ResidentWindow.Key
@@ -141,9 +158,39 @@ class KeyboardWindow(di: DI) :
                 bar.onCandidatePick = { index ->
                     rime.launchOnReady { it.selectCandidate(index, global = true) }
                 }
+                bar.onExpandTap = { toggleCandidatePanel() }
             }
 
         attachKeyboard(evalKeyboard(".default"))
+
+        candidatePanel =
+            CandidatePanelView(context).apply {
+                visibility = View.GONE
+                onPick = { index ->
+                    collapseCandidatePanel()
+                    rime.launchOnReady { it.selectCandidate(index, global = true) }
+                }
+            }
+
+        // 按键区：左右各留 6dp（Typeless 的键不贴屏幕边），整页候选面板叠在上面
+        keyArea =
+            FrameLayout(context).apply {
+                setPadding(context.dp(KEY_SIDE_PADDING_DP), 0, context.dp(KEY_SIDE_PADDING_DP), 0)
+            }
+        keyArea.addView(
+            keyboardView,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+        keyArea.addView(
+            candidatePanel,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT,
+            ),
+        )
 
         // 顶栏放在键盘自己的布局里，而不是塞到 InputView 的顶栏槽位——
         // 后者会和 preedit 争高度，实测会把工具条顶出窗口上沿切掉一截。
@@ -164,18 +211,37 @@ class KeyboardWindow(di: DI) :
                 ),
             )
             addView(
-                keyboardView,
+                View(context),
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    context.dp(TOOLBAR_GAP_DP),
+                ),
+            )
+            addView(
+                keyArea,
                 LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT,
                 ),
             )
+            addView(
+                View(context),
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    context.dp(BOTTOM_GAP_DP),
+                ),
+            )
         }
     }
 
-    /** 键盘高度报给外面时要带上顶栏和它的留白，否则 InputView 会少给这一截。 */
+    /** 键盘高度报给外面时要带上顶栏、缝和底部让位，否则 InputView 会少给这一截。 */
     private fun reportHeight(keysHeight: Int) {
-        runBlocking { _currentKeyboardHeight.emit(keysHeight + toolbarTopMarginPx + toolbarHeightPx) }
+        val chrome =
+            toolbarTopMarginPx +
+                toolbarHeightPx +
+                context.dp(TOOLBAR_GAP_DP) +
+                context.dp(BOTTOM_GAP_DP)
+        runBlocking { _currentKeyboardHeight.emit(keysHeight + chrome) }
     }
 
     private fun detachCurrentView() {
@@ -359,6 +425,7 @@ class KeyboardWindow(di: DI) :
 
     override fun onStartInput(info: EditorInfo) {
         setComposingToolbar(false)
+        collapseCandidatePanel()
         val targetKeyboard =
             when (info.imeOptions and EditorInfo.IME_FLAG_FORCE_ASCII) {
                 EditorInfo.IME_FLAG_FORCE_ASCII -> ".ascii"
@@ -436,17 +503,54 @@ class KeyboardWindow(di: DI) :
      */
     override fun onCandidateListUpdate(data: Candidates.Bulk) {
         if (data.candidates.isEmpty()) {
+            lastCandidates = emptyArray()
             setComposingToolbar(false)
+            collapseCandidatePanel()
         } else {
             if (!::toolbar.isInitialized) return
+            lastCandidates = data.candidates
+            // 拼音写在品牌那一位：行内预编辑只有输入框有，顶栏也留一份
+            toolbar.setComposingText(service.currentComposingText)
             toolbar.updateCandidates(data.candidates, data.highlighted)
             setComposingToolbar(true)
+            if (candidatesExpanded && ::candidatePanel.isInitialized) {
+                candidatePanel.show(data.candidates)
+            }
         }
+    }
+
+    /** 顶栏左边的拼写：只有正在拼写时才显示，免得退出组合后还挂着上一次的字。 */
+    fun onComposingText(text: String) {
+        if (!::toolbar.isInitialized) return
+        toolbar.setComposingText(text)
     }
 
     private fun setComposingToolbar(composing: Boolean) {
         if (!::toolbar.isInitialized) return
         toolbar.setComposing(composing)
+    }
+
+    /** ⌄ / ⌃：把整页候选摊到按键区上面，或收起来。 */
+    private fun toggleCandidatePanel() {
+        if (candidatesExpanded) {
+            collapseCandidatePanel()
+            return
+        }
+        if (lastCandidates.isEmpty() || !::candidatePanel.isInitialized) return
+        candidatesExpanded = true
+        toolbar.setExpanded(true)
+        candidatePanel.show(lastCandidates)
+        candidatePanel.visibility = View.VISIBLE
+    }
+
+    private fun collapseCandidatePanel() {
+        if (!candidatesExpanded) return
+        candidatesExpanded = false
+        if (::toolbar.isInitialized) toolbar.setExpanded(false)
+        if (::candidatePanel.isInitialized) {
+            candidatePanel.visibility = View.GONE
+            candidatePanel.clear()
+        }
     }
 
     override fun onSelectionUpdate(
@@ -504,5 +608,6 @@ class KeyboardWindow(di: DI) :
     override fun onDetached() {
         currentKeyboardView?.onDetach()
         setComposingToolbar(false)
+        collapseCandidatePanel()
     }
 }

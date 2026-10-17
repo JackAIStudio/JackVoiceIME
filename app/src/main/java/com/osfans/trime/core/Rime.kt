@@ -74,6 +74,9 @@ class Rime :
 
     private val lock = Mutex()
 
+    /** librime 预编辑里表示光标位置的字符（U+2038）。 */
+    private val CARET = "\u2038"
+
     /**
      * 拼音的字母**一律**走行内预编辑（直接进输入框），不看 Trime 那个老偏好。
      *
@@ -82,7 +85,11 @@ class Rime :
      * 这个偏好是 Trime 的历史遗留项，我们不再对外提供（见设置页）。
      */
     private val inlinePreeditMode = InlinePreeditMode.COMPOSING_TEXT
-    private val showAsciiSwitchTips by AppPrefs.defaultInstance().general.asciiSwitchTips
+    /**
+     * 切中英/切方案时弹的那个「朙月」小条——是拿预编辑窗画的，纯属噪音。
+     * 我们的顶栏胶囊已经表明当前状态，这里直接关掉（不再读那个历史偏好）。
+     */
+    private val showAsciiSwitchTips = false
 
     private var asciiSwitchTipsJob: Job? = null
     private var isNullInputType = true
@@ -349,7 +356,8 @@ class Rime :
         }
         val inlinePreedit = when (mode) {
             InlinePreeditMode.DISABLE -> ""
-            InlinePreeditMode.COMPOSING_TEXT -> composition.preedit ?: ""
+            // librime 的 preedit 里带一个「‸」当光标标记，直接塞进输入框会多出一个字符
+            InlinePreeditMode.COMPOSING_TEXT -> (composition.preedit ?: "").replace(CARET, "")
             InlinePreeditMode.COMMIT_TEXT_PREVIEW -> composition.commitTextPreview ?: ""
         }
         val composition = if (mode == InlinePreeditMode.COMPOSING_TEXT) {

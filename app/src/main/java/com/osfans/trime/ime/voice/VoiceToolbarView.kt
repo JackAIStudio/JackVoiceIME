@@ -9,6 +9,7 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Typeface
+import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
@@ -16,6 +17,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.osfans.trime.core.CandidateProto
+import com.osfans.trime.ime.keyboard.InputFeedbackManager
 
 /** 顶栏切换器里的三个位置。 */
 enum class VoiceTab { Voice, Pinyin, English }
@@ -29,8 +31,8 @@ enum class VoiceTab { Voice, Pinyin, English }
  *   图标   20dp 五根竖条，条宽 0.115、间距 0.14（间距做宽了整颗图标就散）
  *   文字   15sp，选中 #111、未选 #8A8A8A
  *
- * **这一行同时也是候选行**（Typeless 就是这样）：一输入中文，品牌和胶囊让位给候选词，
- * 候选消失再换回来。所以键盘高度从头到尾不变，不会出现两条横栏叠在一起。
+ * **这一行同时也是候选行**（Typeless 就是这样）：一输入中文，品牌和胶囊让位给
+ * 「拼写 + 候选 + ⌄」，候选消失再换回来。所以键盘高度从头到尾不变。
  */
 class VoiceToolbarView(
     context: Context,
@@ -41,6 +43,9 @@ class VoiceToolbarView(
 
     /** 点候选词，参数是它在全量候选列表里的下标。 */
     var onCandidatePick: ((Int) -> Unit)? = null
+
+    /** 点右边的 ⌄ / ⌃：展开或收起整页候选。 */
+    var onExpandTap: (() -> Unit)? = null
 
     private val brand =
         TextView(context).apply {
@@ -67,10 +72,56 @@ class VoiceToolbarView(
             addView(englishCell, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
         }
 
+    /** 正在拼写的拼音，例如「ce shi」。品牌的位置留给它。 */
+    private val composingText =
+        TextView(context).apply {
+            setTextColor(TEXT2)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            gravity = Gravity.CENTER_VERTICAL
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            maxWidth = dp(120)
+            visibility = GONE
+        }
+
     private val candidates =
         CandidateStripView(context).apply {
-            visibility = GONE
             onPick = { index -> onCandidatePick?.invoke(index) }
+        }
+
+    private val expandButton =
+        TextView(context).apply {
+            text = "\u2304"
+            setTextColor(TEXT2)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
+            gravity = Gravity.CENTER
+            isClickable = true
+            setOnClickListener {
+                InputFeedbackManager.keyPressVibrate(this)
+                onExpandTap?.invoke()
+            }
+        }
+
+    private val composingRow =
+        LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            visibility = GONE
+            addView(
+                composingText,
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                ).apply { marginStart = dp(16) },
+            )
+            addView(
+                candidates,
+                LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f),
+            )
+            addView(
+                expandButton,
+                LinearLayout.LayoutParams(dp(40), LinearLayout.LayoutParams.MATCH_PARENT),
+            )
         }
 
     private var composing = false
@@ -91,7 +142,7 @@ class VoiceToolbarView(
             },
         )
         addView(
-            candidates,
+            composingRow,
             LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT),
         )
         setActive(VoiceTab.Voice)
@@ -105,14 +156,24 @@ class VoiceToolbarView(
         }
     }
 
-    /** 正在拼写：候选顶替品牌与胶囊。 */
+    /** 正在拼写：拼写 + 候选 + ⌄ 顶替品牌与胶囊。 */
     fun setComposing(value: Boolean) {
         if (composing == value) return
         composing = value
         brand.visibility = if (value) GONE else VISIBLE
         switcher.visibility = if (value) GONE else VISIBLE
-        candidates.visibility = if (value) VISIBLE else GONE
-        if (!value) candidates.clear()
+        composingRow.visibility = if (value) VISIBLE else GONE
+        if (!value) {
+            candidates.clear()
+            composingText.visibility = GONE
+            setExpanded(false)
+        }
+    }
+
+    /** 顶栏左边那截拼写（行内预编辑的内容）。 */
+    fun setComposingText(text: String) {
+        composingText.text = text
+        composingText.visibility = if (text.isEmpty()) GONE else VISIBLE
     }
 
     fun updateCandidates(
@@ -122,13 +183,21 @@ class VoiceToolbarView(
         candidates.update(items, highlighted)
     }
 
+    /** ⌄ / ⌃：展开状态时箭头朝上，再点收起。 */
+    fun setExpanded(expanded: Boolean) {
+        expandButton.text = if (expanded) "\u2303" else "\u2304"
+    }
+
     private fun cell(
         content: View,
         onClick: () -> Unit,
     ): FrameLayout =
         FrameLayout(context).apply {
             isClickable = true
-            setOnClickListener { onClick() }
+            setOnClickListener {
+                InputFeedbackManager.keyPressVibrate(this)
+                onClick()
+            }
             addView(content, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
         }
 

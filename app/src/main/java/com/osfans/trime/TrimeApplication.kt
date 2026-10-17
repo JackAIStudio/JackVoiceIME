@@ -173,6 +173,12 @@ class TrimeApplication : Application() {
             Timber.d("isDirectBootMode=$isDirectBootMode")
 
             val appPrefs = AppPrefs.initDefault(sharedPreferences)
+            // JackVoice：键盘震动改成默认开。老安装里这个键可能已经被 Trime 的老默认值写成 false，
+            // 这里做一次性迁移；之后用户自己在设置里关掉就不会再被覆盖。
+            if (!sharedPreferences.getBoolean(HAPTICS_MIGRATION_KEY, false)) {
+                appPrefs.keyboard.vibrateOnKeyPress.setValue(true)
+                sharedPreferences.edit(commit = true) { putBoolean(HAPTICS_MIGRATION_KEY, true) }
+            }
             // record last pid for crash logs
             appPrefs.internal.pid.apply {
                 val currentPid = Process.myPid()
@@ -218,6 +224,8 @@ class TrimeApplication : Application() {
         fun getLastPid() = lastPid
 
         private const val MAX_STACKTRACE_SIZE = 128000
+
+        private const val HAPTICS_MIGRATION_KEY = "jackvoice_haptics_default_v1"
 
         /**
          * This permission is requested by com.android.shell, makes it possible to start

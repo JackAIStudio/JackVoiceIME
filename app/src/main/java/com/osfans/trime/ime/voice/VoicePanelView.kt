@@ -16,6 +16,7 @@ import android.view.View
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.osfans.trime.ime.keyboard.InputFeedbackManager
 import kotlin.math.abs
 import kotlin.math.min
 import kotlin.math.sin
@@ -64,7 +65,10 @@ class VoicePanelView(
     private val orb =
         VoiceOrbView(context).apply {
             isClickable = true
-            setOnClickListener { onOrbTap?.invoke() }
+            setOnClickListener {
+                InputFeedbackManager.keyPressVibrate(this)
+                onOrbTap?.invoke()
+            }
         }
 
     private val actionKey = pillKey("") { onActionTap?.invoke() }
@@ -200,7 +204,10 @@ class VoicePanelView(
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f)
             background = circleDrawable(color)
             isClickable = true
-            setOnClickListener { onClick() }
+            setOnClickListener {
+                InputFeedbackManager.keyPressVibrate(this)
+                onClick()
+            }
         }
 
     private fun pillKey(
@@ -214,7 +221,10 @@ class VoicePanelView(
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
             background = roundedDrawable(WHITE_KEY, dp(23))
             isClickable = true
-            setOnClickListener { onClick() }
+            setOnClickListener {
+                InputFeedbackManager.keyPressVibrate(this)
+                onClick()
+            }
         }
 
     /** 左下角那颗「切换输入法」：用画的地球，避免 emoji 字体的色块。回调同上，点击时才读。 */
@@ -222,7 +232,10 @@ class VoicePanelView(
         FrameLayout(context).apply {
             background = circleDrawable(WHITE_KEY)
             isClickable = true
-            setOnClickListener { onClick() }
+            setOnClickListener {
+                InputFeedbackManager.keyPressVibrate(this)
+                onClick()
+            }
             addView(
                 GlobeGlyphView(context),
                 LayoutParams(dp(20), dp(20)).apply { gravity = Gravity.CENTER },

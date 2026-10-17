@@ -13,6 +13,7 @@ import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.osfans.trime.core.CandidateProto
+import com.osfans.trime.ime.keyboard.InputFeedbackManager
 
 /**
  * 候选词条。
@@ -21,7 +22,7 @@ import com.osfans.trime.core.CandidateProto
  * 🎙|拼|EN，一输入就被候选顶替，候选消失又换回来。所以键盘的总高度从头到尾不变，
  * 也不会出现两条横栏叠在一起。
  *
- * 这个控件就是那一行：横向可滑动，点一个词就上屏。
+ * 这个控件就是那一行里的候选列表：横向可滑动，点一个词就上屏。
  */
 class CandidateStripView(
     context: Context,
@@ -40,7 +41,7 @@ class CandidateStripView(
         overScrollMode = OVER_SCROLL_NEVER
         clipToPadding = false
         addView(row, LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT))
-        setPadding(dp(16), 0, dp(10), 0)
+        setPadding(dp(6), 0, dp(6), 0)
     }
 
     fun update(
@@ -76,7 +77,10 @@ class CandidateStripView(
                 background = rounded(HIGHLIGHT, dp(11))
             }
             isClickable = true
-            setOnClickListener { onPick?.invoke(index) }
+            setOnClickListener {
+                InputFeedbackManager.keyPressVibrate(this)
+                onPick?.invoke(index)
+            }
         }
 
     private fun rounded(

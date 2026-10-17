@@ -95,6 +95,9 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
 
     private var composingText: String = ""
 
+    /** 行内预编辑的当前拼写（拼音），键盘顶栏左边会显示它。 */
+    val currentComposingText: String get() = composingText
+
     private var cursorUpdateIndex = 0
 
     private val recreateInputViewPrefs: Array<PreferenceDelegate<*>> = arrayOf(
@@ -997,6 +1000,9 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
             }
         }
         composingText = text
+        // 顶栏左边那截拼写要跟输入框里的预编辑同步，所以从这条链路直接推过去，
+        // 不靠候选更新去猜（候选和预编辑是两条消息，赶不上一个节拍）。
+        inputView?.onComposingTextChanged(text)
         ic.endBatchEdit()
     }
 

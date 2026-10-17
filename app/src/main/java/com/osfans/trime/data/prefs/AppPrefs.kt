@@ -214,7 +214,8 @@ class AppPrefs(
             "",
         ) { soundOnKeyPress.getValue() && useCustomSoundEffect.getValue() }
 
-        val vibrateOnKeyPress = switch(R.string.vibrate_on_key_press, VIBRATE_ON_KEY_PRESS, false)
+        // 键盘默认给一点震动反馈（Typeless 的手感），系统里关掉触感反馈也不会强来。
+        val vibrateOnKeyPress = switch(R.string.vibrate_on_key_press, VIBRATE_ON_KEY_PRESS, true)
         val vibrateOnKeyRelease = switch(
             R.string.vibrate_on_key_release,
             VIBRATE_ON_KEY_RELEASE,

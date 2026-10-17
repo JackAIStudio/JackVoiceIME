@@ -24,7 +24,7 @@ style:
   comment_vertical_bias: 0.0 #编码提示垂直偏移位置（仅 overlay 模式使用，需要间隙空间足够，范围 0.0~1.0，0.0=top，0.5=center，1.0=bottom）
   comment_text_size: 10 #編碼提示字號
   hanb_font: hanb.ttf #擴充字型
-  horizontal_gap: 4 #鍵水平間距
+  horizontal_gap: 7 #鍵水平間距（对齐 Typeless：键与键之间要有明显缝隙）
   keyboard_padding: 0 #竖屏模式下，屏幕左右两侧与键盘的距离（曲面屏减少误触）
   keyboard_padding_left: 0 #竖屏屏模式下，左手键盘布局，屏幕左侧与键盘的距离
   keyboard_padding_right: 40 #竖屏屏模式下，左手键盘布局，屏幕右侧与键盘的距离
@@ -39,21 +39,22 @@ style:
   label_text_size: 22 #標籤字號
   label_font: label.ttf #編標籤字型
   latin_font: latin.ttf #西文字型
-  # 键盘区总高 = 顶栏留白 11 + 顶栏 44 + 这一段。必须和语音面板的 320dp 相等，
-  # 否则切到拼音时整块键盘会矮一截、App 内容跟着跳（就是「落地」的感觉）。
-  keyboard_height: 265 #锁定键盘高度，避免切换时键盘高度变化而造成闪烁
+  # 键盘区总高 = 留白 11 + 顶栏 44 + 间隔 9 + 这一段 + 底部让位 20 = 320dp，
+  # 必须和语音面板的 320dp 相等，否则切到拼音时整块键盘会矮一截（「落地」感）。
+  # 底部那 20dp 是给手势条让位的：原来按键直接压在手势热区上。
+  keyboard_height: 236 #锁定键盘高度，避免切换时键盘高度变化而造成闪烁
   keyboard_height_land: 200 #锁定横屏下键盘高度，避免切换时键盘高度变化而造成闪烁
   preview_font: latin.ttf #按鍵提示字型
   preview_height: 60 #按鍵提示高度
   preview_offset: -12 #按鍵提示縱向偏移
   preview_text_size: 40 #按鍵提示字號
   reset_ascii_mode_on_focus_change: false #焦点变更弹起输入法软键盘时，重置 ascii_mode
-  round_corner: 12 #按鍵圓角半徑（对齐 Typeless）
+  round_corner: 13 #按鍵圓角半徑（对齐 Typeless）
   shadow_radius: 0.0 #按鍵陰影半徑
   symbol_font: symbol.ttf #符號字型
   symbol_text_size: 10 #符號字號
   text_font: latin.ttf #編碼字型
-  vertical_gap: 4 #鍵盤行距
+  vertical_gap: 12 #鍵盤行距（对齐 Typeless：行与行也别粘在一起）
   #background_folder: #背景图保存在background目录下的哪个子目录
   enter_label_mode: 0  #是否使用App提供的ActionLabel内容作为Enter键的文本（由于多数App没有适配ActionLable，实际影响不大）。0不使用，1只使用actionlabel，2优先使用，3当其他方式没有获得label时才读取actionlabel
   enter_labels:  # 定义Enter键的文本

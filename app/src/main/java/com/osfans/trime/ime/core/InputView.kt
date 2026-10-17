@@ -403,6 +403,11 @@ class InputView(
         enterKeyDisplay.updateLabelOnEditorInfo(info)
     }
 
+    /** 行内预编辑变了：顶栏左边那截拼写跟着变。 */
+    fun onComposingTextChanged(text: String) {
+        keyboardWindow.onComposingText(text)
+    }
+
     override fun handleRimeMessage(it: RimeMessage<*>) {
         when (it) {
             is RimeMessage.SchemaMessage -> {
