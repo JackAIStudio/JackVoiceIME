@@ -992,9 +992,20 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
      * 字母直接上屏（输入框里不留组合下划线），候选由 [EnglishCompleter] 按前缀给。
      */
     fun switchInputLanguage(english: Boolean) {
-        postRimeJob { setRuntimeOption("ascii_mode", english) }
-        inputView?.clearEnglishSuggestions()
-        if (english) postOnMain { updateEnglishSuggestions() }
+        // 切语言时先清掉正在拼的中文组合：不清的话 ascii 切过去以后，
+        // 输入框里那截带下划线的拼音还留着，接着打的英文字母会接在它后面。
+        postRimeJob {
+            clearComposition()
+            setRuntimeOption("ascii_mode", english)
+        }
+        // 切过去时先把上一种语言的拼写气泡收掉（英文气泡不在 Rime 组合里，
+        // 不能等 clearComposition 来收）。候选由两个方向各自的消息接管。
+        inputView?.clearComposingBar()
+        if (english) {
+            postOnMain { updateEnglishSuggestions() }
+        } else {
+            inputView?.clearEnglishSuggestions()
+        }
     }
 
     private fun postOnMain(block: () -> Unit) {
@@ -1023,14 +1034,27 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
         inputView?.showEnglishSuggestions(word, items)
     }
 
-    /** 点英文候选：把刚打的词干删掉，换成整词（不留下划线，所以只能这样补）。 */
+    /**
+     * 点英文候选：把刚打的词干删掉，换成整词（不留下划线，所以只能这样补）。
+     *
+     * 提交后**不要先清空候选**——清空会把顶栏退回「JackVoice + 胶囊」，
+     * 紧接着 [onUpdateSelection] 又按新文本建回来，看起来就是键盘闪了一下。
+     * 直接把候选按提交后的文本重算：有词就原地换候选，没词才收起。
+     */
     fun commitEnglishSuggestion(word: String) {
         val ic = currentInputConnection ?: return
         val before = runCatching { ic.getTextBeforeCursor(32, 0)?.toString() }.getOrNull().orEmpty()
         val stem = before.takeLastWhile { it.code < 128 && it.isLetter() }
-        if (stem.isNotEmpty()) ic.deleteSurroundingText(stem.length, 0)
-        ic.commitText(word, 1)
-        inputView?.clearEnglishSuggestions()
+        // 删词干和提交整词必须是一次批量编辑：中间一旦触发 onUpdateSelection，
+        // 就会按「删掉一半」的文本重算候选，再点一次就会少一个字母。
+        ic.beginBatchEdit()
+        try {
+            if (stem.isNotEmpty()) ic.deleteSurroundingText(stem.length, 0)
+            ic.commitText(word, 1)
+        } finally {
+            ic.endBatchEdit()
+        }
+        updateEnglishSuggestions()
     }
 
     fun clearTextSelection() {

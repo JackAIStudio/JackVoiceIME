@@ -31,23 +31,32 @@
 ### 组合中变成两行：拼写一行、候选一行
 
 ```
-ce shi                     ← ComposingBarView：浮在键盘上沿外面（原来画方案提示的位置）
+┌────────┐
+│ ce shi │                  ← ComposingBarView：贴在键盘上沿左上角的小气泡，只占文字那么大
+├────────┴──────────────  ← 键盘顶边（固定不动的内容区顶边）
 测试 侧室 侧视  ⌄           ← 原来的「JackVoice + 🎙|拼|EN」那一行，组合时让给候选
 q w e r t y u i o p        ← 按键
 ```
 
 不输入时还是「品牌 + 胶囊」；一输入中文，品牌和胶囊收起、候选占那一行，
-拼写单独浮在键盘上方那条。⌄ 展开的整页候选盖在按键区上（`CandidatePanelView`）。
+拼写以**半透明小气泡**浮在键盘左上方（`ComposingBarView`）。⌄ 展开的整页候选盖在按键区上（`CandidatePanelView`）。
+
+候选行右侧（展开箭头左边）留了一个 **「拼/EN」小键**：候选一出现就把整行顶栏占满，英文候选又几乎常驻，
+没有这一格就切不回中文。它显示的是**目标语言**——中文候选时显示「EN」，英文候选时显示「拼」。
 
 **键盘总高度从头到尾不变**（语音面板和打字键盘都是 320dp = 留白 11 + 顶栏 44 + 缝 9 + 按键 236 + 底部让位 20），
-切过去不会「落地」矮一截。
+切过去不会「落地」矮一截。拼写气泡**不算键盘高度**：`InputView.imeContentTop()` 固定报键盘顶边，
+不随气泡出现/消失改变 `contentTopInsets`——否则每打一个字 App 可见区就变高变矮，整屏会抖。
+气泡只覆盖左上角一小块，右边和上方都露给 App。
 
 四处连带的约定，改键盘前先看一眼：
 
 | 位置 | 约定 |
 |---|---|
 | `InputView.applyBarVisibility` | Trime 原来那条独立候选栏（`InputBarDelegate`）**永远是 GONE**，别再打开 |
-| `ComposingBarView` | 拼写条在输入法**可触摸区域之外**——它只显示不接收触摸，所以别再往里加可点的东西（要加就得像预编辑那样套一个透明 `PopupWindow` 转发触摸） |
+| `ComposingBarView` | 气泡在输入法**可触摸区域之外**——它只显示不接收触摸，所以别再往里加可点的东西（要加就得像预编辑那样套一个透明 `PopupWindow` 转发触摸）；宽度随文字、最多 60% 屏宽，别改回整行 |
+| 英文候选（`EnglishCompleter`） | 不经过 Rime，**没人替它刷新**：切键盘时由 `KeyboardWindow.onAttached`、`ascii_mode` 变化时由 `onRimeOptionUpdated` 主动补候选；切语言前先 `clearCandidates()`，别让上一种语言的候选留在顶栏上 |
+| `commitEnglishSuggestion` | 删词干 + 提交整词要用 `beginBatchEdit/endBatchEdit` 包起来，并且**不要再 `clearEnglishSuggestions()`**——先清会把顶栏闪回「品牌 + 胶囊」，再点候选还可能吞字 |
 | `Rime.kt` 的 `inlinePreeditMode` | 强制 `COMPOSING_TEXT`：拼音字母直接进输入框；预编辑里的 `‸`(U+2038) 光标标记必须剥掉，不然会被当正文写进输入框 |
 | 主题 `CommitAction` 键 | 底行动作键。组合中先选高亮候选上屏，commit 到了再执行宿主 `imeOptions` 动作——**直接发 Return 会把原始拼音上屏** |
 

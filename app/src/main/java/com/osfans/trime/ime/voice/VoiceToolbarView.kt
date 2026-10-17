@@ -48,6 +48,9 @@ class VoiceToolbarView(
     /** 点右边的展开箭头：展开或收起整页候选。 */
     var onExpandTap: (() -> Unit)? = null
 
+    /** 点候选行里的语言小键：切到另一种语言（中文 ↔ 英文）。 */
+    var onLanguageSwitchTap: (() -> Unit)? = null
+
     private val brand =
         TextView(context).apply {
             text = "JackVoice"
@@ -93,6 +96,26 @@ class VoiceToolbarView(
             )
         }
 
+    /**
+     * 候选行里的语言切换小键（显示**目标**语言）：
+     * 中文候选时显示「EN」，英文候选时显示「拼」。
+     *
+     * 候选一出现就把整行顶栏占满了，「拼/EN」胶囊也跟着收起来了——英文候选
+     * 几乎常驻，用户想切回中文时会发现没有按钮可点，点到的反而是候选词。
+     * 所以在候选行里留这一格，输入中也能随时切换。
+     */
+    private val langSwitch =
+        TextView(context).apply {
+            gravity = Gravity.CENTER
+            setTextColor(TEXT2)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            isClickable = true
+            setOnClickListener {
+                InputFeedbackManager.keyPressVibrate(this)
+                onLanguageSwitchTap?.invoke()
+            }
+        }
+
     private val composingRow =
         LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -101,6 +124,10 @@ class VoiceToolbarView(
             addView(
                 candidates,
                 LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f),
+            )
+            addView(
+                langSwitch,
+                LinearLayout.LayoutParams(dp(48), LinearLayout.LayoutParams.MATCH_PARENT),
             )
             addView(
                 expandButton,
@@ -163,6 +190,8 @@ class VoiceToolbarView(
             cell.background = if (on) rounded(ACTIVE, dp(13)) else null
             (cell.getChildAt(0) as? TextView)?.setTextColor(if (on) TEXT else TEXT2)
         }
+        // 候选行的小键显示「要切过去的语言」，别显示当前语言——中文时显示 EN。
+        langSwitch.text = if (tab == VoiceTab.English) "拼" else "EN"
     }
 
     private fun cell(

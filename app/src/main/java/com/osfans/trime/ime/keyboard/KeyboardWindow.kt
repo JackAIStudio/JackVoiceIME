@@ -13,6 +13,7 @@ import android.view.WindowInsets
 import android.view.inputmethod.EditorInfo
 import android.widget.FrameLayout
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import com.osfans.trime.R
 import com.osfans.trime.core.CandidateProto
 import com.osfans.trime.core.Candidates
@@ -38,6 +39,7 @@ import com.osfans.trime.util.isLandscape
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.kodein.di.DI
 import org.kodein.di.instance
@@ -169,6 +171,8 @@ class KeyboardWindow(di: DI) :
                 }
                 bar.onExpandTap = { toggleCandidatePanel() }
                 bar.onHideTap = { service.requestHideSelf(0) }
+                // 候选行里的「拼/EN」：英文候选常驻，没有这一格就切不回中文。
+                bar.onLanguageSwitchTap = { switchLanguage() }
             }
 
         attachKeyboard(evalKeyboard(".default"))
@@ -434,7 +438,12 @@ class KeyboardWindow(di: DI) :
     }
 
     override fun onStartInput(info: EditorInfo) {
-        setComposingToolbar(false)
+        // 英文候选是词表给的，Rime 重新聚焦时不会自己冒候选；如果当前已经是英文模式，
+        // 别把顶栏收成品牌——等 updateEnglishSuggestions 刷新，否则切键盘时顶栏会闪一下。
+        if (!rime.run { statusCached }.isAsciiMode) {
+            clearEnglishCandidates()
+            setComposingToolbar(false)
+        }
         collapseCandidatePanel()
         val targetKeyboard =
             when (info.imeOptions and EditorInfo.IME_FLAG_FORCE_ASCII) {
@@ -523,6 +532,11 @@ class KeyboardWindow(di: DI) :
 
     fun clearEnglishCandidates() {
         if (!englishMode) return
+        clearCandidates()
+    }
+
+    /** 不管候选是 Rime 的中文还是词表给的英文，一律清掉，顶栏交还「品牌 + 胶囊」。 */
+    private fun clearCandidates() {
         englishMode = false
         lastCandidates = emptyArray()
         setComposingToolbar(false)
@@ -590,7 +604,17 @@ class KeyboardWindow(di: DI) :
     }
 
     override fun onRimeOptionUpdated(value: RimeMessage.OptionMessage.Data) {
-        if (value.option == "ascii_mode") syncToolbarActive()
+        if (value.option == "ascii_mode") {
+            syncToolbarActive()
+            // 语言一切换，旧语言的候选就作废（中文候选不该留在英文键盘上）；先清掉，
+            // 英文模式下再按光标前的词重建。
+            clearCandidates()
+            if (value.value) {
+                // ascii_mode 真正生效之后再按光标前的词补候选。切英文的那一下
+                // statusCached 还是旧值，早一步更新会被当成「非英文」清空，候选就没了。
+                service.updateEnglishSuggestions()
+            }
+        }
         val option = value.option
         when {
             option.startsWith("_keyboard_") -> {
@@ -619,12 +643,26 @@ class KeyboardWindow(di: DI) :
 
     override fun onAttached() {
         syncToolbarActive()
+        // 从语音面板切回来时 ascii_mode 往往已经是对的，不会再发 OptionMessage；
+        // 英文又没有 Rime 组合会自己冒候选，所以这里主动按光标前的词补一次，
+        // 否则切回英文键盘后要等下一次按键候选才出来。
+        if (rime.run { statusCached }.isAsciiMode) {
+            service.lifecycleScope.launch { service.updateEnglishSuggestions() }
+        }
     }
 
     private fun syncToolbarActive() {
         if (!::toolbar.isInitialized) return
         val english = rime.run { statusCached }.isAsciiMode
         toolbar.setActive(if (english) VoiceTab.English else VoiceTab.Pinyin)
+    }
+
+    /** 候选行里的语言小键：按当前 ascii_mode 切到另一种语言。 */
+    private fun switchLanguage() {
+        val toEnglish = !rime.run { statusCached }.isAsciiMode
+        clearCandidates()
+        service.switchInputLanguage(toEnglish)
+        toolbar.setActive(if (toEnglish) VoiceTab.English else VoiceTab.Pinyin)
     }
 
     override fun onDetached() {

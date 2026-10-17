@@ -248,6 +248,9 @@ class InputView(
                     if (isVoice) {
                         // 从拼音键盘切过来时把没打完的拼写清掉：不清的话候选和预编辑会
                         // 残留在语音面板下面透出来（面板顶栏是透明的）。
+                        // 英文的气泡不在 Rime 组合里，得单独收，否则会浮在语音面板上面。
+                        composingBar.setComposingText("")
+                        englishSuggestionsShown = false
                         rime.launchOnReady { it.clearComposition() }
                     }
                 }
@@ -337,13 +340,12 @@ class InputView(
             },
         )
 
-        // 候选条贴在键盘上沿外面那一条（原来 Trime 画方案提示的位置）
+        // 拼写气泡贴在键盘上沿外面左上角，宽随文字；它只是浮层，不参与键盘高度
         add(
             composingBar,
-            lParams(matchParent, dp(ComposingBarView.HEIGHT_DP)) {
+            lParams(wrapContent, dp(ComposingBarView.HEIGHT_DP)) {
                 above(keyboardView)
                 startOfParent()
-                endOfParent()
             },
         )
 
@@ -420,13 +422,15 @@ class InputView(
     }
 
     /**
-     * 输入法内容区的顶边（窗口坐标）。
+     * 输入法内容区的顶边（窗口坐标）= **键盘顶边**，固定不动。
      *
-     * 拼写条画在键盘上沿**外面**，如果按键盘顶边报给系统，那条就会盖住下面的 App——
-     * 底部有输入框的 App 会被挡掉半截。所以拼写条可见时按它的顶边报，App 会自己让出这一条。
+     * 拼写气泡浮在键盘上沿外面（左上角一小块半透明），它只是显示，
+     * 不算输入法占用的高度。以前这里在气泡可见时改报气泡顶边，
+     * 结果每打一个字、拼写条出现或消失，App 的可见区就跟着变高变矮，
+     * 整屏都会抖一下——这就是那个「键盘高度忽高忽低」的来源。
      */
     fun imeContentTop(): Int {
-        val v = if (composingBar.visibility == View.VISIBLE && ::keyboardView.isInitialized) composingBar else keyboardView
+        val v = if (::keyboardView.isInitialized) keyboardView else this
         v.getLocationInWindow(locationInWindow)
         return locationInWindow[1]
     }
@@ -457,9 +461,21 @@ class InputView(
 
     private var englishSuggestionsShown = false
 
-    /** 行内预编辑变了：键盘上沿那条拼写跟着变（空 = 收起；英文模式不显示）。 */
+    /**
+     * 行内预编辑变了：中文时把拼音同步到键盘上沿那条气泡。
+     *
+     * 英文（ascii_mode）别在这里动气泡——英文没有 Rime 组合，气泡归
+     * [showEnglishSuggestions] / [clearEnglishSuggestions] 管。两边都写会互相清掉，
+     * 表现就是打英文时那条气泡一闪一闪、甚至整条消失。
+     */
     fun onComposingTextChanged(text: String) {
-        composingBar.setComposingText(if (rime.run { statusCached }.isAsciiMode) "" else text)
+        if (rime.run { statusCached }.isAsciiMode) return
+        composingBar.setComposingText(text)
+    }
+
+    /** 切英文/切语音时用：只收起拼写气泡，不动候选和 Rime 状态。 */
+    fun clearComposingBar() {
+        composingBar.setComposingText("")
     }
 
     override fun handleRimeMessage(it: RimeMessage<*>) {

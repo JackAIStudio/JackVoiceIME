@@ -73,7 +73,10 @@ class BoardWindowManager(override val di: DI) : DIAware {
 
     fun attachWindow(window: BoardWindow) {
         if (window === currentWindow) {
+            // 已经在这块窗口上：直接返回。以前只打一行日志、然后照旧 detach 再 attach，
+            // 切英文方案时会走到这里——结果是键盘被整个重建，候选清掉、顶栏闪回品牌。
             Timber.d("Skip attaching $window")
+            return
         }
         val newView =
             if (window is ResidentWindow) {
