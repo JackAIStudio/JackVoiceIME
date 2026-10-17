@@ -192,6 +192,7 @@ class TrimeApplication : Application() {
                 AppPrefs.defaultInstance().syncToDeviceEncryptedStorage()
                 ThemeManager.syncToDeviceEncryptedStorage()
             }
+            installRimePatches()
             registerBroadcastReceiver()
             startWorkManager()
         } catch (e: Exception) {
@@ -207,6 +208,33 @@ class TrimeApplication : Application() {
         } catch (e: Exception) {
             Timber.w(e, "Something wrong on configuration changed")
         }
+    }
+
+    /**
+     * 把 luna_pinyin 的默认状态改成「简体输出 + 只留中英/繁简两个开关」。
+     *
+     * 以前是直接改 submodule 里的 `luna_pinyin.schema.yaml`：那个仓指向 Rime 官方，
+     * 我们写不回去，换台机器 clone 下来这处改动就没了。现在改成写一份 Rime 标准的
+     * `*.custom.yaml` 到用户目录，仓库自身是自洽的。
+     */
+    private fun installRimePatches() {
+        val dir = File(externalFilesDir, "rime").also { it.mkdirs() }
+        val patch = File(dir, "luna_pinyin.custom.yaml")
+        if (patch.exists()) return
+        runCatching {
+            patch.writeText(
+                """
+                patch:
+                  switches:
+                    - name: ascii_mode
+                      reset: 0
+                      states: [ 中文, 西文 ]
+                    - name: simplification
+                      reset: 1
+                      states: [ 繁体, 简体 ]
+                """.trimIndent() + "\n",
+            )
+        }.onFailure { Timber.w(it, "写入 luna_pinyin 补丁失败") }
     }
 
     private fun startWorkManager() {

@@ -438,14 +438,24 @@ class InputView(
         word: String,
         items: List<String>,
     ) {
+        englishSuggestionsShown = true
         composingBar.setComposingText(word)
         keyboardWindow.showEnglishCandidates(items)
     }
 
+    /**
+     * 只收英文候选。**不能顺手把拼写条清掉**——中文组合时它显示的是拼音，
+     * 每次选区变化都会走到这里，清了中文的拼写条就没了。
+     */
     fun clearEnglishSuggestions() {
         keyboardWindow.clearEnglishCandidates()
-        composingBar.setComposingText("")
+        if (englishSuggestionsShown) {
+            englishSuggestionsShown = false
+            composingBar.setComposingText("")
+        }
     }
+
+    private var englishSuggestionsShown = false
 
     /** 行内预编辑变了：键盘上沿那条拼写跟着变（空 = 收起；英文模式不显示）。 */
     fun onComposingTextChanged(text: String) {
