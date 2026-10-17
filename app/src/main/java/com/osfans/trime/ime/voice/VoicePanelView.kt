@@ -16,6 +16,7 @@ import android.view.View
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.osfans.trime.ime.keyboard.GestureFrame
 import com.osfans.trime.ime.keyboard.InputFeedbackManager
 import kotlin.math.abs
 import kotlin.math.min
@@ -99,7 +100,7 @@ class VoicePanelView(
                 },
             )
             addView(
-                circleKey("\u232B", GRAY_KEY) { onBackspaceTap?.invoke() },
+                repeatCircleKey("\u232B", GRAY_KEY) { onBackspaceTap?.invoke() },
                 LayoutParams(dp(48), dp(48)).apply {
                     gravity = Gravity.BOTTOM or Gravity.END
                     marginEnd = dp(18)
@@ -225,6 +226,35 @@ class VoicePanelView(
                 InputFeedbackManager.keyPressVibrate(this)
                 onClick()
             }
+        }
+
+    /**
+     * 按住能连删的圆形键。
+     *
+     * 语音面板这颗 ⌫ 原来只挂了 `setOnClickListener`，按多久都只删一个字；
+     * 拼音/英文键盘的 ⌫ 是 `KeyView`，继承 [GestureFrame] 的 `isRepeatable`。
+     * 这里直接复用同一个 [GestureFrame]：长按延迟、连发间隔、震动都跟打字键盘一致，
+     * 不再手写一套定时器。
+     */
+    private fun repeatCircleKey(
+        glyph: String,
+        color: Int,
+        onRepeat: () -> Unit,
+    ): FrameLayout =
+        GestureFrame(context).apply {
+            background = circleDrawable(color)
+            isClickable = true
+            isRepeatable = true
+            onClick = onRepeat
+            addView(
+                TextView(context).apply {
+                    text = glyph
+                    gravity = Gravity.CENTER
+                    setTextColor(ICON_DARK)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f)
+                },
+                LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT),
+            )
         }
 
     /** 左下角那颗「切换输入法」：用画的地球，避免 emoji 字体的色块。回调同上，点击时才读。 */
