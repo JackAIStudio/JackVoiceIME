@@ -155,10 +155,6 @@ class KeyboardWindow(di: DI) :
                     service.postRimeJob { setRuntimeOption("ascii_mode", true) }
                     bar.setActive(VoiceTab.English)
                 }
-                bar.onCandidatePick = { index ->
-                    rime.launchOnReady { it.selectCandidate(index, global = true) }
-                }
-                bar.onExpandTap = { toggleCandidatePanel() }
             }
 
         attachKeyboard(evalKeyboard(".default"))
@@ -424,7 +420,6 @@ class KeyboardWindow(di: DI) :
     }
 
     override fun onStartInput(info: EditorInfo) {
-        setComposingToolbar(false)
         collapseCandidatePanel()
         val targetKeyboard =
             when (info.imeOptions and EditorInfo.IME_FLAG_FORCE_ASCII) {
@@ -498,55 +493,37 @@ class KeyboardWindow(di: DI) :
     }
 
     /**
-     * 候选走顶栏那一行（对齐 Typeless）：有候选就顶替品牌 + 胶囊，没有就换回来。
-     * Trime 原来那条独立候选栏已经不再显示（见 InputView）。
+     * 候选条浮在键盘上方（见 CandidateBarView / InputView），这里只负责
+     * 记住当前候选、以及在「⌄」展开时把整页摊到按键区上。
      */
     override fun onCandidateListUpdate(data: Candidates.Bulk) {
         if (data.candidates.isEmpty()) {
             lastCandidates = emptyArray()
-            setComposingToolbar(false)
             collapseCandidatePanel()
         } else {
-            if (!::toolbar.isInitialized) return
             lastCandidates = data.candidates
-            // 拼音写在品牌那一位：行内预编辑只有输入框有，顶栏也留一份
-            toolbar.setComposingText(service.currentComposingText)
-            toolbar.updateCandidates(data.candidates, data.highlighted)
-            setComposingToolbar(true)
             if (candidatesExpanded && ::candidatePanel.isInitialized) {
                 candidatePanel.show(data.candidates)
             }
         }
     }
 
-    /** 顶栏左边的拼写：只有正在拼写时才显示，免得退出组合后还挂着上一次的字。 */
-    fun onComposingText(text: String) {
-        if (!::toolbar.isInitialized) return
-        toolbar.setComposingText(text)
-    }
-
-    private fun setComposingToolbar(composing: Boolean) {
-        if (!::toolbar.isInitialized) return
-        toolbar.setComposing(composing)
-    }
-
-    /** ⌄ / ⌃：把整页候选摊到按键区上面，或收起来。 */
-    private fun toggleCandidatePanel() {
+    /** ⌄ / ⌃：把整页候选摊到按键区上面，或收起来。返回收起后的状态（true = 已展开）。 */
+    fun toggleCandidatePanel(): Boolean {
         if (candidatesExpanded) {
             collapseCandidatePanel()
-            return
+            return false
         }
-        if (lastCandidates.isEmpty() || !::candidatePanel.isInitialized) return
+        if (lastCandidates.isEmpty() || !::candidatePanel.isInitialized) return false
         candidatesExpanded = true
-        toolbar.setExpanded(true)
         candidatePanel.show(lastCandidates)
         candidatePanel.visibility = View.VISIBLE
+        return true
     }
 
-    private fun collapseCandidatePanel() {
+    fun collapseCandidatePanel() {
         if (!candidatesExpanded) return
         candidatesExpanded = false
-        if (::toolbar.isInitialized) toolbar.setExpanded(false)
         if (::candidatePanel.isInitialized) {
             candidatePanel.visibility = View.GONE
             candidatePanel.clear()
@@ -607,7 +584,6 @@ class KeyboardWindow(di: DI) :
 
     override fun onDetached() {
         currentKeyboardView?.onDetach()
-        setComposingToolbar(false)
         collapseCandidatePanel()
     }
 }
