@@ -419,6 +419,20 @@ class InputView(
         enterKeyDisplay.updateLabelOnEditorInfo(info)
     }
 
+    /**
+     * 输入法内容区的顶边（窗口坐标）。
+     *
+     * 拼写条画在键盘上沿**外面**，如果按键盘顶边报给系统，那条就会盖住下面的 App——
+     * 底部有输入框的 App 会被挡掉半截。所以拼写条可见时按它的顶边报，App 会自己让出这一条。
+     */
+    fun imeContentTop(): Int {
+        val v = if (composingBar.visibility == View.VISIBLE && ::keyboardView.isInitialized) composingBar else keyboardView
+        v.getLocationInWindow(locationInWindow)
+        return locationInWindow[1]
+    }
+
+    private val locationInWindow = IntArray(2)
+
     /** 行内预编辑变了：键盘上沿那条拼写跟着变（空 = 收起；英文模式不显示）。 */
     fun onComposingTextChanged(text: String) {
         composingBar.setComposingText(if (rime.run { statusCached }.isAsciiMode) "" else text)

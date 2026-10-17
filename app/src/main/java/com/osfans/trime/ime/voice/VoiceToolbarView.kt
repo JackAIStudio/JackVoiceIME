@@ -8,6 +8,7 @@ package com.osfans.trime.ime.voice
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.Typeface
 import android.util.TypedValue
 import android.view.Gravity
@@ -18,24 +19,20 @@ import android.widget.TextView
 import com.osfans.trime.core.CandidateProto
 import com.osfans.trime.ime.keyboard.InputFeedbackManager
 
-/** 顶栏切换器里的三个位置。 */
-enum class VoiceTab { Voice, Pinyin, English }
+/** 顶栏切换器里的几个位置。Hide 不是「语言」，只是收起键盘。 */
+enum class VoiceTab { Voice, Pinyin, English, Hide }
 
 /**
- * 键盘顶部的工具条：左边品牌，右边 `[🎙|拼|EN]` 切换胶囊。
+ * 键盘顶部的工具条：左边品牌，右边 `[🎙|拼|EN|⌄]` 切换胶囊。
  *
  * 尺寸逐项量自 Typeless 截图：
- *   容器   142×37dp 白色全圆角，内缩 3dp
+ *   容器   142×36dp 白色全圆角，内缩 3dp（加「收起键盘」这格以后加宽到 176dp）
  *   活跃格 浅灰胶囊，四角全圆——**必须内缩在容器里**，否则两块圆角怼在一起像个葫芦
- *   图标   20dp 五根竖条，条宽 0.115、间距 0.14（间距做宽了整颗图标就散）
+ *   图标   五根竖条的小波形，整体控制在 18dp 内（撑满整格就太粗太高了）
  *   文字   15sp，选中 #111、未选 #8A8A8A
  *
- * **输入中文时这一行让给候选**：品牌和胶囊收起，换成「候选 + ⌄」；
- * 拼写单独占键盘上沿外面那条（[ComposingBarView]），所以这里是：
- *
- *   ceshi                      ← ComposingBarView，浮在键盘上沿外面
- *   测试 侧室 侧视  ⌄           ← 这一行
- *   q w e r t y u i o p        ← 按键
+ * **输入中文时这一行让给候选**：品牌和胶囊收起，换成「候选 + 展开箭头」；
+ * 拼写单独占键盘上沿外面那条（[ComposingBarView]）。
  */
 class VoiceToolbarView(
     context: Context,
@@ -43,11 +40,12 @@ class VoiceToolbarView(
     var onVoiceTap: (() -> Unit)? = null
     var onPinyinTap: (() -> Unit)? = null
     var onEnglishTap: (() -> Unit)? = null
+    var onHideTap: (() -> Unit)? = null
 
     /** 点候选词，参数是它在全量候选列表里的下标。 */
     var onCandidatePick: ((Int) -> Unit)? = null
 
-    /** 点右边的 ⌄ / ⌃：展开或收起整页候选。 */
+    /** 点右边的展开箭头：展开或收起整页候选。 */
     var onExpandTap: (() -> Unit)? = null
 
     private val brand =
@@ -62,17 +60,19 @@ class VoiceToolbarView(
     private val waveCell = cell(WaveGlyphView(context)) { onVoiceTap?.invoke() }
     private val pinyinCell = cell(label("拼")) { onPinyinTap?.invoke() }
     private val englishCell = cell(label("EN")) { onEnglishTap?.invoke() }
+    private val hideCell = cell(HideKeyboardGlyphView(context)) { onHideTap?.invoke() }
 
     private val cells = listOf(waveCell, pinyinCell, englishCell)
 
     private val switcher =
         LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
-            background = rounded(WHITE, dp(19))
+            background = rounded(WHITE, dp(18))
             setPadding(dp(3), dp(3), dp(3), dp(3))
             addView(waveCell, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
             addView(pinyinCell, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
             addView(englishCell, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
+            addView(hideCell, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
         }
 
     private val candidates =
@@ -81,16 +81,16 @@ class VoiceToolbarView(
         }
 
     private val expandButton =
-        TextView(context).apply {
-            text = "\u2304"
-            setTextColor(TEXT2)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
-            gravity = Gravity.CENTER
+        FrameLayout(context).apply {
             isClickable = true
             setOnClickListener {
                 InputFeedbackManager.keyPressVibrate(this)
                 onExpandTap?.invoke()
             }
+            addView(
+                ChevronGlyphView(context),
+                LayoutParams(dp(18), dp(18)).apply { gravity = Gravity.CENTER },
+            )
         }
 
     private val composingRow =
@@ -120,7 +120,7 @@ class VoiceToolbarView(
         )
         addView(
             switcher,
-            LayoutParams(dp(142), dp(36)).apply {
+            LayoutParams(dp(176), dp(36)).apply {
                 gravity = Gravity.END or Gravity.CENTER_VERTICAL
                 marginEnd = dp(15)
             },
@@ -152,9 +152,9 @@ class VoiceToolbarView(
         candidates.update(items, highlighted)
     }
 
-    /** ⌄ / ⌃：展开状态时箭头朝上，再点收起。 */
+    /** 展开状态时箭头朝上，再点收起。 */
     fun setExpanded(expanded: Boolean) {
-        expandButton.text = if (expanded) "\u2303" else "\u2304"
+        (expandButton.getChildAt(0) as? ChevronGlyphView)?.pointsUp = expanded
     }
 
     fun setActive(tab: VoiceTab) {
@@ -210,7 +210,7 @@ class VoiceToolbarView(
     }
 }
 
-/** 切换器里的语音标识：五根圆头竖条的小波形，比例照 Typeless 量。 */
+/** 切换器里的语音标识：五根圆头竖条的小波形，整体控制在 18dp 见方，别撑满整格。 */
 class WaveGlyphView(
     context: Context,
 ) : View(context) {
@@ -224,14 +224,90 @@ class WaveGlyphView(
         super.onDraw(canvas)
         val cx = width / 2f
         val cy = height / 2f
-        val h = minOf(width, height).toFloat()
-        val weights = floatArrayOf(0.35f, 0.75f, 1f, 0.72f, 0.32f)
-        paint.strokeWidth = h * 0.115f
-        val gap = h * 0.14f
+        val h = minOf(dp(18f), minOf(width, height).toFloat())
+
+        val weights = floatArrayOf(0.34f, 0.72f, 1f, 0.70f, 0.32f)
+        paint.strokeWidth = h * 0.075f
+        val gap = h * 0.155f
         for (i in weights.indices) {
             val bh = h * weights[i]
             val x = cx + (i - 2) * (paint.strokeWidth + gap)
             canvas.drawLine(x, cy - bh / 2, x, cy + bh / 2, paint)
         }
+    }
+
+    private fun dp(value: Float): Float = value * resources.displayMetrics.density
+}
+
+/** 候选展开箭头：画出来的，几何中心对齐，不用 font 里的 `⌄`（那个会偏下）。 */
+class ChevronGlyphView(
+    context: Context,
+) : View(context) {
+    var pointsUp: Boolean = false
+        set(value) {
+            field = value
+            invalidate()
+        }
+
+    private val paint =
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            color = 0xFF8A8A8A.toInt()
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+        }
+
+    private val path = Path()
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        val w = width.toFloat()
+        val h = height.toFloat()
+        val inset = w * 0.22f
+        val half = h * 0.16f
+        paint.strokeWidth = w * 0.09f
+        path.reset()
+        if (pointsUp) {
+            path.moveTo(inset, h / 2 + half)
+            path.lineTo(w / 2, h / 2 - half)
+            path.lineTo(w - inset, h / 2 + half)
+        } else {
+            path.moveTo(inset, h / 2 - half)
+            path.lineTo(w / 2, h / 2 + half)
+            path.lineTo(w - inset, h / 2 - half)
+        }
+        canvas.drawPath(path, paint)
+    }
+}
+
+/** 收起键盘：向下的折线 + 底下一条横线。 */
+class HideKeyboardGlyphView(
+    context: Context,
+) : View(context) {
+    private val paint =
+        Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            color = 0xFF111111.toInt()
+            strokeCap = Paint.Cap.ROUND
+            strokeJoin = Paint.Join.ROUND
+        }
+
+    private val path = Path()
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        val s = minOf(width, height).toFloat()
+        val cx = width / 2f
+        val cy = height / 2f
+        paint.strokeWidth = s * 0.085f
+        val halfW = s * 0.27f
+        val chevronTop = cy - s * 0.26f
+        val chevronBottom = cy + s * 0.02f
+        path.reset()
+        path.moveTo(cx - halfW, chevronTop)
+        path.lineTo(cx, chevronBottom)
+        path.lineTo(cx + halfW, chevronTop)
+        canvas.drawPath(path, paint)
+        canvas.drawLine(cx - halfW, cy + s * 0.28f, cx + halfW, cy + s * 0.28f, paint)
     }
 }

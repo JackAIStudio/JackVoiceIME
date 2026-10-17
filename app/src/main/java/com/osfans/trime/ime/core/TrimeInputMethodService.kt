@@ -520,7 +520,13 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
 
     override fun onComputeInsets(outInsets: Insets) {
         if (inputDeviceManager.useVirtualKeyboard) {
-            inputView?.keyboardView?.getLocationInWindow(inputViewLocation)
+            // 拼写条可见时按它的顶边算，让 App 让出那一条（否则会盖住底部输入框）
+            val top = inputView?.imeContentTop()
+            if (top != null) {
+                inputViewLocation[1] = top
+            } else {
+                inputView?.keyboardView?.getLocationInWindow(inputViewLocation)
+            }
             outInsets.apply {
                 contentTopInsets = inputViewLocation[1]
                 visibleTopInsets = inputViewLocation[1]

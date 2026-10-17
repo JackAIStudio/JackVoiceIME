@@ -159,6 +159,7 @@ class KeyboardWindow(di: DI) :
                     rime.launchOnReady { it.selectCandidate(index, global = true) }
                 }
                 bar.onExpandTap = { toggleCandidatePanel() }
+                bar.onHideTap = { service.requestHideSelf(0) }
             }
 
         attachKeyboard(evalKeyboard(".default"))
