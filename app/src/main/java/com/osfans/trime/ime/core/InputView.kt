@@ -39,7 +39,7 @@ import com.osfans.trime.ime.keyboard.KeyboardPrefs.isLandscapeMode
 import com.osfans.trime.ime.keyboard.KeyboardWindow
 import com.osfans.trime.ime.popup.PopupDelegate
 import com.osfans.trime.ime.symbol.LiquidWindow
-import com.osfans.trime.ime.voice.CandidateBarView
+import com.osfans.trime.ime.voice.ComposingBarView
 import com.osfans.trime.ime.voice.VoicePanelView
 import com.osfans.trime.ime.voice.VoiceWindow
 import com.osfans.trime.ime.window.BoardWindow
@@ -106,15 +106,8 @@ class InputView(
             setOnClickListener(placeholderListener)
         }
 
-    /** 浮在键盘上方的候选条（拼音 + 候选 + ⌄）。 */
-    private val candidateBar = CandidateBarView(context).apply { visibility = View.GONE }
-
-    /**
-     * 候选条画在输入法窗口里、但位置在键盘上沿之外——那一块**不在输入法的可触摸区域**里，
-     * 直接放一个 View 是点不动的（触摸会落到下面的 App 上）。所以照 Trime 预编辑的老办法：
-     * 用一个透明 PopupWindow 盖在它上面，把触摸转发进来。
-     */
-    private val candidateBarTouch by lazy { TouchEventReceiverWindow(candidateBar) }
+    /** 拼写条：正在拼的拼音单独占一行，浮在键盘上沿外面（候选在键盘顶栏那一行）。 */
+    private val composingBar = ComposingBarView(context).apply { visibility = View.GONE }
 
     private val updateWindowViewHeightJob: Job
 
@@ -175,19 +168,6 @@ class InputView(
      *   和 Typeless 一样——输入时候选顶替「品牌 + 胶囊」，不输入时换回来。
      *   原来那条独立的候选栏既和顶栏叠印，候选字号（22sp）又撑破 28dp 的行高。
      */
-    /** 候选来了就显示候选条；没有候选（拼写结束/清掉）就收起。 */
-    private fun updateCandidateBar(data: Candidates.Bulk) {
-        if (data.candidates.isEmpty() || !windowManager.isAttached(keyboardWindow)) {
-            candidateBar.visibility = View.GONE
-            candidateBar.clear()
-            candidateBarTouch.dismiss()
-            return
-        }
-        candidateBar.update(data.candidates, data.highlighted)
-        candidateBar.visibility = View.VISIBLE
-        candidateBar.post { candidateBarTouch.show() }
-    }
-
     private fun applyBarVisibility(isVoice: Boolean) {
         inputBar.view.visibility = View.GONE
         applyKeyboardViewHeight(isVoice)
@@ -245,16 +225,6 @@ class InputView(
         val receivers: List<InputBroadcastReceiver> by allInstances()
         receivers.forEach { broadcaster.addReceiver(it) }
 
-        candidateBar.onCandidatePick = { index ->
-            rime.launchOnReady { it.selectCandidate(index, global = true) }
-        }
-        candidateBar.onExpandTap = {
-            if (windowManager.isAttached(keyboardWindow)) {
-                val expanded = keyboardWindow.toggleCandidatePanel()
-                candidateBar.setExpanded(expanded)
-                // 展开时也要让触摸代理跟着，键盘区上盖着的是候选面板，不需要它
-            }
-        }
         windowManager.cacheResidentWindow(keyboardWindow, createView = true)
         windowManager.cacheResidentWindow(liquidWindow)
         windowManager.cacheResidentWindow(voiceWindow, createView = true)
@@ -369,8 +339,8 @@ class InputView(
 
         // 候选条贴在键盘上沿外面那一条（原来 Trime 画方案提示的位置）
         add(
-            candidateBar,
-            lParams(matchParent, dp(CandidateBarView.HEIGHT_DP)) {
+            composingBar,
+            lParams(matchParent, dp(ComposingBarView.HEIGHT_DP)) {
                 above(keyboardView)
                 startOfParent()
                 endOfParent()
@@ -436,9 +406,7 @@ class InputView(
         restarting: Boolean = false,
     ) {
         updateEnterKeyLabel(info)
-        candidateBar.visibility = View.GONE
-        candidateBar.clear()
-        candidateBarTouch.dismiss()
+        composingBar.setComposingText("")
         broadcaster.onStartInput(info)
         if (!restarting) {
             // 对标 Typeless：语音面板就是**主键盘**——点进任何输入框先看到「点击说话」。
@@ -451,9 +419,9 @@ class InputView(
         enterKeyDisplay.updateLabelOnEditorInfo(info)
     }
 
-    /** 行内预编辑变了：候选条左边那截拼写跟着变。 */
+    /** 行内预编辑变了：键盘上沿那条拼写跟着变（空 = 收起；英文模式不显示）。 */
     fun onComposingTextChanged(text: String) {
-        candidateBar.setComposingText(text)
+        composingBar.setComposingText(if (rime.run { statusCached }.isAsciiMode) "" else text)
     }
 
     override fun handleRimeMessage(it: RimeMessage<*>) {
@@ -489,7 +457,6 @@ class InputView(
 
             is RimeMessage.BulkCandidatesMessage -> {
                 broadcaster.onCandidateListUpdate(it.data)
-                updateCandidateBar(it.data)
             }
 
             else -> {}
@@ -508,7 +475,6 @@ class InputView(
     fun handleInlineSuggestions(response: InlineSuggestionsResponse): Boolean = inputBar.handleInlineSuggestions(response)
 
     override fun onDetachedFromWindow() {
-        candidateBarTouch.dismiss()
         ViewCompat.setOnApplyWindowInsetsListener(this, null)
         // cancel the notification job and clear all broadcast receivers,
         // implies that InputView should not be attached again after detached.

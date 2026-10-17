@@ -155,6 +155,10 @@ class KeyboardWindow(di: DI) :
                     service.postRimeJob { setRuntimeOption("ascii_mode", true) }
                     bar.setActive(VoiceTab.English)
                 }
+                bar.onCandidatePick = { index ->
+                    rime.launchOnReady { it.selectCandidate(index, global = true) }
+                }
+                bar.onExpandTap = { toggleCandidatePanel() }
             }
 
         attachKeyboard(evalKeyboard(".default"))
@@ -420,6 +424,7 @@ class KeyboardWindow(di: DI) :
     }
 
     override fun onStartInput(info: EditorInfo) {
+        setComposingToolbar(false)
         collapseCandidatePanel()
         val targetKeyboard =
             when (info.imeOptions and EditorInfo.IME_FLAG_FORCE_ASCII) {
@@ -493,19 +498,29 @@ class KeyboardWindow(di: DI) :
     }
 
     /**
-     * 候选条浮在键盘上方（见 CandidateBarView / InputView），这里只负责
-     * 记住当前候选、以及在「⌄」展开时把整页摊到按键区上。
+     * 组合中：拼写单独一行浮在键盘上方（ComposingBarView），候选占顶栏那一行
+     * （VoiceToolbarView 的 composingRow）。这里只负责记住候选、以及 ⌄ 展开整页。
      */
     override fun onCandidateListUpdate(data: Candidates.Bulk) {
         if (data.candidates.isEmpty()) {
             lastCandidates = emptyArray()
+            setComposingToolbar(false)
             collapseCandidatePanel()
         } else {
             lastCandidates = data.candidates
+            if (::toolbar.isInitialized) {
+                toolbar.updateCandidates(data.candidates, data.highlighted)
+                setComposingToolbar(true)
+            }
             if (candidatesExpanded && ::candidatePanel.isInitialized) {
                 candidatePanel.show(data.candidates)
             }
         }
+    }
+
+    private fun setComposingToolbar(composing: Boolean) {
+        if (!::toolbar.isInitialized) return
+        toolbar.setComposing(composing)
     }
 
     /** ⌄ / ⌃：把整页候选摊到按键区上面，或收起来。返回收起后的状态（true = 已展开）。 */
@@ -516,6 +531,7 @@ class KeyboardWindow(di: DI) :
         }
         if (lastCandidates.isEmpty() || !::candidatePanel.isInitialized) return false
         candidatesExpanded = true
+        if (::toolbar.isInitialized) toolbar.setExpanded(true)
         candidatePanel.show(lastCandidates)
         candidatePanel.visibility = View.VISIBLE
         return true
@@ -524,6 +540,7 @@ class KeyboardWindow(di: DI) :
     fun collapseCandidatePanel() {
         if (!candidatesExpanded) return
         candidatesExpanded = false
+        if (::toolbar.isInitialized) toolbar.setExpanded(false)
         if (::candidatePanel.isInitialized) {
             candidatePanel.visibility = View.GONE
             candidatePanel.clear()
@@ -584,6 +601,7 @@ class KeyboardWindow(di: DI) :
 
     override fun onDetached() {
         currentKeyboardView?.onDetach()
+        setComposingToolbar(false)
         collapseCandidatePanel()
     }
 }
