@@ -55,8 +55,14 @@ class VoiceWindow(di: DI) :
         view.onAtTap = { service.commitText("@") }
         view.onActionTap = { performEditorAction() }
         // 顶部切换胶囊的「拼」/「EN」：切到拼音/英文键盘，并同步 Rime 的 ascii_mode
-        view.toolbar.onPinyinTap = { switchToKeyboard(ascii = false) }
-        view.toolbar.onEnglishTap = { switchToKeyboard(ascii = true) }
+        view.toolbar.onPinyinTap = {
+            service.switchInputLanguage(false)
+            switchToKeyboard()
+        }
+        view.toolbar.onEnglishTap = {
+            service.switchInputLanguage(true)
+            switchToKeyboard()
+        }
         panel = view
         return view
     }
@@ -141,12 +147,9 @@ class VoiceWindow(di: DI) :
         }
     }
 
-    private fun switchToKeyboard(ascii: Boolean?) {
+    private fun switchToKeyboard() {
         VoiceEngine.cancel()
         VoiceCaptureService.stop(service)
-        if (ascii != null) {
-            service.postRimeJob { setRuntimeOption("ascii_mode", ascii) }
-        }
         windowManager.attachWindow(keyboardWindow)
     }
 

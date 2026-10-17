@@ -147,12 +147,13 @@ class KeyboardWindow(di: DI) :
         toolbar =
             VoiceToolbarView(context).also { bar ->
                 bar.onVoiceTap = { boardWindowManager.attachWindow(voiceWindow) }
+                // 切的是 Rime 方案（英文有自己的方案和词库），不是只翻 ascii_mode
                 bar.onPinyinTap = {
-                    service.postRimeJob { setRuntimeOption("ascii_mode", false) }
+                    service.switchInputLanguage(false)
                     bar.setActive(VoiceTab.Pinyin)
                 }
                 bar.onEnglishTap = {
-                    service.postRimeJob { setRuntimeOption("ascii_mode", true) }
+                    service.switchInputLanguage(true)
                     bar.setActive(VoiceTab.English)
                 }
                 bar.onCandidatePick = { index ->
@@ -595,9 +596,9 @@ class KeyboardWindow(di: DI) :
 
     private fun syncToolbarActive() {
         if (!::toolbar.isInitialized) return
-        toolbar.setActive(
-            if (rime.run { statusCached }.isAsciiMode) VoiceTab.English else VoiceTab.Pinyin,
-        )
+        val status = rime.run { statusCached }
+        val english = status.schemaId == TrimeInputMethodService.EN_SCHEMA_ID || status.isAsciiMode
+        toolbar.setActive(if (english) VoiceTab.English else VoiceTab.Pinyin)
     }
 
     override fun onDetached() {

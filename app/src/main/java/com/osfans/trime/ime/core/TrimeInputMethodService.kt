@@ -69,6 +69,13 @@ import timber.log.Timber
 /** [輸入法][InputMethodService]主程序  */
 
 open class TrimeInputMethodService : LifecycleInputMethodService() {
+
+    companion object {
+        /** 英文 Rime 方案（见 assets/shared/en_US.*）。 */
+        const val EN_SCHEMA_ID = "en_US"
+
+        private const val DEFAULT_CHINESE_SCHEMA = "luna_pinyin"
+    }
     private lateinit var rime: RimeSession
     private val jobs = Channel<Job>(capacity = Channel.UNLIMITED)
 
@@ -981,6 +988,30 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
         }
         return false
     }
+
+    /**
+     * 拼 / EN：切的是 **Rime 方案**，不只是 ascii_mode。
+     *
+     * 英文有自己的方案（`en_US` + 10k 词库），跟 Typeless 一样打字母出候选词；
+     * 光翻 ascii_mode 的话中文方案只会把字母原样透传，永远没有候选。
+     */
+    fun switchInputLanguage(english: Boolean) {
+        val current = rime.run { statusCached.schemaId }
+        val target =
+            if (english) {
+                if (current != EN_SCHEMA_ID && current.isNotEmpty()) lastChineseSchema = current
+                EN_SCHEMA_ID
+            } else {
+                lastChineseSchema.ifEmpty { DEFAULT_CHINESE_SCHEMA }
+            }
+        if (current == target) return
+        postRimeJob {
+            clearComposition()
+            selectSchema(target)
+        }
+    }
+
+    private var lastChineseSchema = DEFAULT_CHINESE_SCHEMA
 
     fun clearTextSelection() {
         val ic = currentInputConnection ?: return

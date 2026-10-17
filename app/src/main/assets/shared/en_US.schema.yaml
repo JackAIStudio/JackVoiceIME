@@ -1,0 +1,62 @@
+# Rime schema — English（英文键盘：打字母出候选词，跟拼音一个观感）
+#
+# 结构照社区里跑得通的 rime-easy-en（BlindingDark），去掉它的 lua 过滤器；
+# 词库见 en_US.dict.yaml（10k 常用词，按词频排序）。
+# SPDX-License-Identifier: GPL-3.0-or-later
+---
+schema:
+  schema_id: en_US
+  name: English
+  version: "1.0"
+  author:
+    - JackVoice
+  description:
+    English word completion.
+
+switches:
+  # 注意：这里是「方案内输入」不是「ascii 直通」。reset 必须是 0——
+  # 置 1 的话 ascii_composer 会把字母直接放行，方案根本不出候选。
+  - name: ascii_mode
+    reset: 0
+    states: [ ASCII-OFF, ASCII-ON ]
+
+engine:
+  processors:
+    - ascii_composer
+    - key_binder
+    - speller
+    - recognizer
+    - punctuator
+    - selector
+    - navigator
+    - express_editor
+  segmentors:
+    - matcher
+    - ascii_segmentor
+    - abc_segmentor
+    - punct_segmentor
+    - fallback_segmentor
+  translators:
+    - table_translator
+    - punct_translator
+  filters:
+    - uniquifier
+
+speller:
+  alphabet: zyxwvutsrqponmlkjihgfedcbaZYXWVUTSRQPONMLKJIHGFEDCBA
+  delimiter: " '"
+
+key_binder:
+  import_preset: default
+
+recognizer:
+  import_preset: default
+  patterns:
+    uppercase: ''
+
+translator:
+  dictionary: en_US
+  enable_user_dict: true
+  spelling_hints: 9
+  comment_format:
+    - xform/^.+$//

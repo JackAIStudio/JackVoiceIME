@@ -24,6 +24,9 @@
 - 顶栏左侧品牌、右侧 `[🎙|拼|EN]` 切换器（142×36dp，字形 17sp）；打字键盘是重写过的极简四排
 - 123 页照 Typeless 抄：数字 / 半角符号 / `#+=`+中文标点 / `拼音`+空格+动作键；
   `#+=` 进第二页（`symbols2`），第二页左下角 `123` 回第一页
+- **英文是独立 Rime 方案**（`assets/shared/en_US.schema.yaml` + `en_US.dict.yaml`，约 9.5k 常用词）：
+  点胶囊的 EN 是 `selectSchema("en_US")`，不是只翻 ascii_mode——只翻 ascii 的话中文方案会把字母原样透传、永远没有候选。
+  方案的 `ascii_mode` 必须 `reset: 0`（置 1 会让 ascii_composer 直接放行字母）
 
 ### 组合中变成两行：拼写一行、候选一行
 
