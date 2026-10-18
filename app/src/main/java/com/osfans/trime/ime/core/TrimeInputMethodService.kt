@@ -62,6 +62,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.consumeEach
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import splitties.bitflags.hasFlag
 import splitties.systemservices.clipboardManager
@@ -75,6 +76,10 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
     companion object {
         /** 选完英文候选后的抑制窗口，用来盖住编辑器回读文本的延迟。 */
         private const val COMMIT_SUPPRESS_MS = 600L
+
+        /** 等主题就绪的轮询间隔；50ms × 200 = 最多等 10 秒。 */
+        private const val THEME_READY_POLL_MS = 50L
+        private const val THEME_READY_MAX_POLLS = 200
     }
     private lateinit var rime: RimeSession
     private val jobs = Channel<Job>(capacity = Channel.UNLIMITED)
@@ -85,6 +90,7 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
     private lateinit var lastKnownConfig: Configuration
     private var inputView: InputView? = null
     private var candidatesView: CandidatesView? = null
+    private var deferredInputViewJob: Job? = null
     private val navBarManager = NavigationBarManager()
     private val inputDeviceManager = InputDeviceManager { useVirtualKeyboard, useCandidatesView ->
         postRimeJob {
@@ -576,11 +582,39 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
         val scope = themeScope
         if (scope == null) {
             Timber.w("ThemeScope is not ready yet; deferring input view creation")
+            deferInputViewUntilThemeReady()
             return null
         }
         replaceInputViews(scope)
         // We will call `setInputView` by ourselves. This is fine.
         return null
+    }
+
+    /**
+     * 冷启动（装完第一次唤键盘）时 Rime 还没就绪，`ThemeManager.init()` 尚未执行，
+     * [themeScope] 是 null，[onCreateInputView] 只能返回空。而主题就绪那一次
+     * `fireChange` 又发生在 `onThemeChangeListener` 注册之前，没人会回来补建，
+     * 结果就是键盘是空的，必须收起再唤一次才正常。
+     *
+     * 这里等主题就绪后自己把视图补上。只在键盘仍显示着的时候补——用户已经切走就别硬弹。
+     */
+    private fun deferInputViewUntilThemeReady() {
+        if (deferredInputViewJob?.isActive == true) return
+        deferredInputViewJob = lifecycleScope.launch {
+            var polls = 0
+            while (themeScope == null && polls < THEME_READY_MAX_POLLS) {
+                delay(THEME_READY_POLL_MS)
+                polls++
+            }
+            val scope = themeScope ?: run {
+                Timber.w("ThemeScope never became ready; giving up on deferred input view")
+                return@launch
+            }
+            if (!isInputViewShown()) return@launch
+            Timber.d("ThemeScope is ready now; rebuilding the deferred input view")
+            replaceInputViews(scope)
+            requestShowSelf(0)
+        }
     }
 
     override fun setInputView(view: View) {
@@ -647,6 +681,10 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
         val (useVirtualKeyboard, useCandidatesView) =
             inputDeviceManager.evaluateOnStartInputView(attribute, this)
         if (useVirtualKeyboard) {
+            // 上次 onCreateInputView 时主题还没就绪的话，这里补建，别让键盘空着。
+            if (inputView == null) {
+                themeScope?.let { replaceInputViews(it) }
+            }
             inputView?.startInput(attribute, restarting)
         }
         if (useCandidatesView) {
