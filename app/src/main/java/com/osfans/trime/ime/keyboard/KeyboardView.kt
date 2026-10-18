@@ -28,6 +28,13 @@ class KeyboardView(
     private val enterKeyDisplay: EnterKeyDisplayDelegate,
 ) : FrameLayout(context) {
 
+    /** 空格长按触控板的状态，交给外层 [KeyboardWindow] 做淡出提示。 */
+    var onTrackpadStateChanged: ((Boolean) -> Unit)? = null
+
+    fun setTrackpadState(active: Boolean) {
+        onTrackpadStateChanged?.invoke(active)
+    }
+
     private val keys get() = keyboard.keys
 
     internal val labelEnter: String
@@ -101,6 +108,7 @@ class KeyboardView(
         get() = keyboard.mShiftKey?.isOn == true
 
     fun onDetach() {
+        setTrackpadState(false)
         popup.dismissAll()
     }
 }

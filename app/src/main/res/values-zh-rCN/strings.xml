@@ -7,8 +7,8 @@
 
 <resources xmlns:xliff="urn:oasis:names:tc:xliff:document:1.2">
     <!-- 输入法平台名称  -->
-    <string name="app_name_release">同文输入法</string>
-    <string name="app_name_debug">同文输入法（调试）</string>
+    <string name="app_name_release">JackVoice</string>
+    <string name="app_name_debug">JackVoice</string>
     <string name="qq_group_1">同文 QQ 群 1</string>
     <string name="qq_group_2">同文 QQ 群 2</string>
     <string name="rime_qq_group">中州韵 QQ 群</string>
@@ -61,12 +61,13 @@
     <string name="deploy_finish">部署完成</string>
     <string name="system_default">系统默认</string>
     <string name="key_swipe_travel">触发按键滑动手势的距离</string>
-    <string name="trime_app_slogan">击响中文之韵</string>
+    <string name="trime_app_slogan">说话即成文</string>
+    <string name="keyboard_trackpad_hint">移动光标</string>
     <string name="custom_sound_effect_name">自定义按键音效</string>
     <string name="setup__next">下一步</string>
     <string name="done">完成</string>
-    <string name="setup__enable_ime_hint">在语言和输入设置中启用<b>同文输入法</b></string>
-    <string name="setup__select_ime_hint">选择<b>同文输入法</b>作为默认输入法</string>
+    <string name="setup__enable_ime_hint">在语言和输入设置中启用<b>JackVoice</b></string>
+    <string name="setup__select_ime_hint">选择<b>JackVoice</b>作为默认输入法</string>
     <string name="setup__enable_ime">启用输入法</string>
     <string name="setup__select_ime">选择输入法</string>
     <string name="setup__prev">上一步</string>
@@ -153,7 +154,7 @@
     <string name="enable_landscape_mode">启用横屏模式</string>
     <string name="split_space_percent">自动分割键盘比例</string>
     <string name="setup__step_three">第 3 步</string>
-    <string name="setup__select_data_path_hint">选择<b>同文输入法</b>如何存储 Rime 数据</string>
+    <string name="setup__select_data_path_hint">选择<b>JackVoice</b>如何存储 Rime 数据</string>
     <string name="setup__select_data_path">选择外部数据目录…</string>
     <string name="setup__data_path_imported">数据文件夹导入成功</string>
     <string name="setup__data_path_import_failed">数据文件夹导入失败</string>

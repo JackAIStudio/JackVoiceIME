@@ -25,11 +25,13 @@ open class GestureFrame(context: Context) : FrameLayout(context) {
     private var startX = 0f
     private var startY = 0f
     private var lastX = 0f
+    private var lastY = 0f
     private var startTime = 0L
 
     private var isLongPressed = false
     private var slideActivated = false
     private var swipeTriggered = false
+    private var trackpadActive = false
 
     private var longPressJob: Job? = null
     private var repeatJob: Job? = null
@@ -52,17 +54,19 @@ open class GestureFrame(context: Context) : FrameLayout(context) {
     var onSwipeUp: (() -> Unit)? = null
     var onSwipeDown: (() -> Unit)? = null
 
-    var onSlide: ((delta: Int, x: Float, y: Float) -> Unit)? = null
+    var onSlide: ((dx: Int, dy: Int, x: Float, y: Float) -> Unit)? = null
 
     var onPress: (() -> Unit)? = null
     var onRelease: ((behavior: KeyBehavior, longPress: Boolean) -> Unit)? = null
     var onCancel: (() -> Unit)? = null
     var onMove: ((x: Float, y: Float, longPress: Boolean) -> Unit)? = null
     var onSwipe: ((behavior: KeyBehavior) -> Unit)? = null
+    var onTrackpadState: ((active: Boolean) -> Unit)? = null
 
     var isRepeatable = false
     var isSlideCursor = false
     var isSlideDelete = false
+    var isTrackpad = false
 
     var hasLongPress = false
     var hasDouble = false
@@ -90,8 +94,10 @@ open class GestureFrame(context: Context) : FrameLayout(context) {
                 startX = x
                 startY = y
                 lastX = startX
+                lastY = startY
                 startTime = SystemClock.elapsedRealtime()
 
+                endTrackpad()
                 isLongPressed = false
                 slideActivated = false
                 swipeTriggered = false
@@ -102,7 +108,7 @@ open class GestureFrame(context: Context) : FrameLayout(context) {
                 if (vibrateOnKeyPress) InputFeedbackManager.keyPressVibrate(this)
                 onPress?.invoke()
 
-                if (hasLongPress || isRepeatable || hasPopup) {
+                if (hasLongPress || isRepeatable || hasPopup || isTrackpad) {
                     startLongPressJob(currentTouchId)
                 }
 
@@ -118,6 +124,19 @@ open class GestureFrame(context: Context) : FrameLayout(context) {
 
                 onMove?.invoke(x, y, isLongPressed)
 
+                // 长按空格后进入触控板：两个方向都按步长累计移动。
+                if (trackpadActive) {
+                    val stepX = getNStep(lastX, x, slideStepSize.toFloat())
+                    val stepY = getNStep(lastY, y, slideStepSize.toFloat())
+                    if (stepX != 0 || stepY != 0) {
+                        slideActivated = true
+                        onSlide?.invoke(stepX, stepY, x, y)
+                        if (stepX != 0) lastX = x
+                        if (stepY != 0) lastY = y
+                    }
+                    return true
+                }
+
                 if ((isSlideCursor || isSlideDelete) && onSlide != null && !isLongPressed && swipeTravel > 0) {
                     if (!slideActivated) {
                         if (abs(dx) >= swipeTravel) {
@@ -129,7 +148,7 @@ open class GestureFrame(context: Context) : FrameLayout(context) {
                     if (slideActivated) {
                         val step = getNStep(lastX, x, slideStepSize.toFloat())
                         if (step != 0) {
-                            onSlide?.invoke(step, x, y)
+                            onSlide?.invoke(step, 0, x, y)
                             lastX = x
                         }
                     }
@@ -156,8 +175,20 @@ open class GestureFrame(context: Context) : FrameLayout(context) {
                 if (vibrateOnKeyRelease) InputFeedbackManager.keyPressVibrate(this)
                 cancelJobs()
 
+                if (trackpadActive) {
+                    val moved = slideActivated
+                    endTrackpad()
+                    if (moved) {
+                        onCancel?.invoke()
+                    } else {
+                        // 只是长按、没有拖动：仍然按一次空格。
+                        dispatchBehavior(KeyBehavior.CLICK, false)
+                    }
+                    return true
+                }
+
                 if (slideActivated) {
-                    onSlide?.invoke(0, x, y)
+                    onSlide?.invoke(0, 0, x, y)
                     onCancel?.invoke()
                     return true
                 }
@@ -211,6 +242,7 @@ open class GestureFrame(context: Context) : FrameLayout(context) {
                 isLongPressed = false
                 slideActivated = false
                 swipeTriggered = false
+                endTrackpad()
 
                 onCancel?.invoke()
                 return true
@@ -229,7 +261,10 @@ open class GestureFrame(context: Context) : FrameLayout(context) {
 
             if (vibrateOnKeyPress) InputFeedbackManager.keyPressVibrate(this@GestureFrame, true)
 
-            if (isRepeatable) {
+            if (isTrackpad) {
+                trackpadActive = true
+                onTrackpadState?.invoke(true)
+            } else if (isRepeatable) {
                 startRepeatJob()
             } else {
                 performLongClick()
@@ -300,12 +335,23 @@ open class GestureFrame(context: Context) : FrameLayout(context) {
         doubleTapJob?.cancel()
     }
 
+    private fun endTrackpad() {
+        if (!trackpadActive) return
+        trackpadActive = false
+        onTrackpadState?.invoke(false)
+    }
+
     fun getNStep(start: Float, end: Float, step: Float): Int = (if (start < end) 1 else -1) *
         floor(abs(end - start) / step).toInt()
 
     override fun setOnLongClickListener(l: OnLongClickListener?) {
         hasLongPress = l != null
         super.setOnLongClickListener(l)
+    }
+
+    override fun onDetachedFromWindow() {
+        endTrackpad()
+        super.onDetachedFromWindow()
     }
 
     override fun performClick(): Boolean {

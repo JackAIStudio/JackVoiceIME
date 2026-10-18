@@ -75,6 +75,7 @@ class KeyView(
         isRepeatable = key.click?.isRepeatable ?: false
         isSlideCursor = key.click?.isSlideCursor ?: false
         isSlideDelete = key.click?.isSlideDelete ?: false
+        isTrackpad = key.click?.isTrackpad ?: false
         hasLongPress = key.hasAction(KeyBehavior.LONG_CLICK)
         // Shift键始终参与双击检测，以便支持双击锁定大写（可通过设置项 hookShiftLock 关闭）
         hasDouble = key.hasAction(KeyBehavior.DOUBLE_CLICK) || key.isShift
@@ -82,6 +83,8 @@ class KeyView(
         hasPopup = key.popup.isNotEmpty()
 
         onPress = {
+            // 组合中空格要留给 Rime 选候选；此时不进入触控板。
+            isTrackpad = (key.click?.isTrackpad ?: false) && !service.isRimeComposing()
             if (keyboard.firstPressedKeyIndex == -1) keyboard.firstPressedKeyIndex = id
             setPressedState(true)
             key.getCode(KeyBehavior.CLICK).let { keyboardActionListener.onPress(it) }
@@ -129,31 +132,40 @@ class KeyView(
             showPopupPreview(direction)
         }
 
-        onSlide = { delta, _, _ ->
-            if (isSlideCursor) {
+        onSlide = { dx, dy, _, _ ->
+            if (isTrackpad) {
+                // 触控板模式：水平走选区，垂直走方向键（多行输入框里才有效）。
+                if (dx != 0 || dy != 0) service.moveCursorBy(dx, dy)
+            } else if (isSlideCursor) {
                 when {
-                    delta > 0 -> keyboardActionListener.onAction(theme.resolveAction("Right"))
-                    delta < 0 -> keyboardActionListener.onAction(theme.resolveAction("Left"))
+                    dx > 0 -> keyboardActionListener.onAction(theme.resolveAction("Right"))
+                    dx < 0 -> keyboardActionListener.onAction(theme.resolveAction("Left"))
                 }
             } else if (isSlideDelete) {
                 val ic = service.currentInputConnection
                 when {
-                    delta < 0 -> {
-                        val beforeText = ic.getTextBeforeCursor(1, 0) ?: ""
-                        if (beforeText.isNotEmpty()) {
-                            deletedTextBuffer.addFirst(beforeText.toString())
-                            ic.deleteSurroundingText(1, 0)
+                    dx < 0 -> {
+                        repeat((-dx).coerceAtMost(8)) {
+                            val beforeText = ic.getTextBeforeCursor(1, 0) ?: ""
+                            if (beforeText.isNotEmpty()) {
+                                deletedTextBuffer.addFirst(beforeText.toString())
+                                ic.deleteSurroundingText(1, 0)
+                            }
                         }
                     }
 
-                    delta > 0 -> {
-                        if (deletedTextBuffer.isNotEmpty()) {
-                            ic.commitText(deletedTextBuffer.removeFirst(), 1)
+                    dx > 0 -> {
+                        repeat(dx.coerceAtMost(8)) {
+                            if (deletedTextBuffer.isNotEmpty()) {
+                                ic.commitText(deletedTextBuffer.removeFirst(), 1)
+                            }
                         }
                     }
                 }
             }
         }
+
+        onTrackpadState = { active -> keyboardView.setTrackpadState(active) }
 
         onLongClick = {
             if (key.popup.isNotEmpty()) {

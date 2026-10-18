@@ -22,6 +22,8 @@ data class PresetKey(
     val repeatable: Boolean = false,
     val slideCursor: Boolean = false,
     val slideDelete: Boolean = false,
+    /** 长按后进入触控板模式：拖动可上下左右移动光标，松手不产生字符。 */
+    val trackpad: Boolean = false,
     val functional: Boolean = false,
     @Serializable(with = LenientStringListSerializer::class)
     val states: List<String> = emptyList(),

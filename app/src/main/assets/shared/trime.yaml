@@ -884,7 +884,8 @@ preset_keys:
   Return2: {label: 回车, send: Return }
   Hide: {label: 隱藏, send: BACK}
   BackSpace: {label: '⌫', repeatable: true, send: BackSpace}
-  space: {label: 空格, repeatable: false, functional: false, send: space}
+  # 长按空格进入触控板：拖动移动光标，松手不插入空格；轻点仍是空格。
+  space: {label: 空格, repeatable: false, functional: false, trackpad: true, send: space}
   space1: {label: 空格, repeatable: false, functional: false, send: space}
   Escape: {label: Esc, send: Escape}
   Home: {label: 行首, send: Home}

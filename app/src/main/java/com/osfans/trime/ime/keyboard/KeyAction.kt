@@ -46,6 +46,8 @@ class KeyAction(
         private set
     var isSlideDelete = false
         private set
+    var isTrackpad = false
+        private set
 
     val isModifierKey: Boolean
         // Trime把function键消费掉了，因此键盘只处理function键以外的修饰键
@@ -192,6 +194,7 @@ class KeyAction(
                     isFunctional = preset.functional
                     isSlideCursor = preset.slideCursor
                     isSlideDelete = preset.slideDelete
+                    isTrackpad = preset.trackpad
                     states = preset.states
 
                     label = preset.label

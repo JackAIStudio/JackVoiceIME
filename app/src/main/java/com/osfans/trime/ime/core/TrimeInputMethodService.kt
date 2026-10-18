@@ -68,6 +68,7 @@ import splitties.bitflags.hasFlag
 import splitties.systemservices.clipboardManager
 import splitties.systemservices.inputMethodManager
 import timber.log.Timber
+import kotlin.math.abs
 
 /** [輸入法][InputMethodService]主程序  */
 
@@ -80,6 +81,10 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
         /** 等主题就绪的轮询间隔；50ms × 200 = 最多等 10 秒。 */
         private const val THEME_READY_POLL_MS = 50L
         private const val THEME_READY_MAX_POLLS = 200
+
+        /** 触控板一次事件最多吞掉的步数，防止快速甩动把光标甩飞。 */
+        private const val MAX_TRACKPAD_STEPS = 16
+        private const val MAX_TRACKPAD_VERTICAL_STEPS = 8
     }
     private lateinit var rime: RimeSession
     private val jobs = Channel<Job>(capacity = Channel.UNLIMITED)
@@ -120,6 +125,9 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
 
     /** 行内预编辑的当前拼写（拼音），键盘顶栏左边会显示它。 */
     val currentComposingText: String get() = composingText
+
+    /** 给键盘手势判断用：组合中先让 Rime 处理，不抢空格。 */
+    fun isRimeComposing(): Boolean = ::rime.isInitialized && rime.run { statusCached }.isComposing
 
     private var cursorUpdateIndex = 0
 
@@ -732,6 +740,83 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
         lastCommittedText = text
         composingText = ""
         InputFeedbackManager.textCommitSpeak(text)
+    }
+
+    /**
+     * 空格长按触控板：按步移动光标。
+     *
+     * 水平方向直接改选区，避免方向键被宿主的焦点导航吃掉；垂直方向拿不到可靠的
+     * 排版信息，只在多行输入框里发 DPAD 上/下，让宿主自己按视觉行移动。
+     */
+    fun moveCursorBy(dx: Int, dy: Int): Boolean {
+        if (dx == 0 && dy == 0) return false
+        val ic = currentInputConnection ?: return false
+        // 组合中的选区属于 Rime，硬改会把预编辑文本和候选状态拆散。
+        if (rime.run { statusCached }.isComposing) return false
+
+        var moved = false
+        if (dx != 0) {
+            val et = ic.getExtractedText(ExtractedTextRequest(), 0)
+            val text = et?.text
+            val selStart = et?.selectionStart ?: -1
+            val selEnd = et?.selectionEnd ?: -1
+            if (et != null && text != null && selStart >= 0 && selEnd >= 0) {
+                var cursor =
+                    if (selStart != selEnd) {
+                        if (dx < 0) selStart else selEnd
+                    } else {
+                        selStart
+                    }
+                if (selStart == selEnd) {
+                    repeat(abs(dx).coerceAtMost(MAX_TRACKPAD_STEPS)) {
+                        cursor =
+                            when {
+                                dx > 0 && cursor < text.length ->
+                                    cursor + Character.charCount(Character.codePointAt(text, cursor))
+
+                                dx < 0 && cursor > 0 ->
+                                    Character.offsetByCodePoints(text, cursor, -1)
+
+                                else -> cursor
+                            }
+                    }
+                }
+                val target = et.startOffset + cursor
+                moved = ic.setSelection(target, target)
+                if (!moved) {
+                    repeat(abs(dx).coerceAtMost(MAX_TRACKPAD_STEPS)) {
+                        sendDownUpKeyEvent(if (dx > 0) KeyEvent.KEYCODE_DPAD_RIGHT else KeyEvent.KEYCODE_DPAD_LEFT, 0)
+                    }
+                    moved = true
+                }
+            } else {
+                repeat(abs(dx).coerceAtMost(MAX_TRACKPAD_STEPS)) {
+                    sendDownUpKeyEvent(if (dx > 0) KeyEvent.KEYCODE_DPAD_RIGHT else KeyEvent.KEYCODE_DPAD_LEFT, 0)
+                }
+                moved = true
+            }
+        }
+
+        if (dy != 0) {
+            val info = currentInputEditorInfo ?: return moved
+            val multiline =
+                (info.inputType and InputType.TYPE_MASK_CLASS) == InputType.TYPE_CLASS_TEXT &&
+                    (info.inputType and InputType.TYPE_TEXT_FLAG_MULTI_LINE) != 0
+            if (multiline) {
+                var remaining = abs(dy).coerceAtMost(MAX_TRACKPAD_VERTICAL_STEPS)
+                while (remaining-- > 0) {
+                    // 光标已经在整段文本的头/尾时不要再发方向键，否则宿主会把焦点
+                    // 移出输入框，键盘跟着收起。
+                    val current = ic.getExtractedText(ExtractedTextRequest(), 0)
+                    val start = current?.selectionStart ?: -1
+                    val length = current?.text?.length ?: -1
+                    if (start >= 0 && length >= 0 && ((dy < 0 && start == 0) || (dy > 0 && start == length))) break
+                    sendDownUpKeyEvent(if (dy > 0) KeyEvent.KEYCODE_DPAD_DOWN else KeyEvent.KEYCODE_DPAD_UP, 0)
+                    moved = true
+                }
+            }
+        }
+        return moved
     }
 
     /**

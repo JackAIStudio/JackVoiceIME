@@ -4,14 +4,18 @@
 
 package com.osfans.trime.ime.keyboard
 
+import android.graphics.Color
 import android.graphics.Point
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.text.InputType
+import android.view.Gravity
 import android.view.View
 import android.view.WindowInsets
 import android.view.inputmethod.EditorInfo
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.TextView
 import android.widget.Toast
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
@@ -95,6 +99,8 @@ class KeyboardWindow(di: DI) :
     /** 按键区（含左右留白），整页候选面板叠在它上面。 */
     private lateinit var keyArea: FrameLayout
     private lateinit var candidatePanel: CandidatePanelView
+    private lateinit var trackpadHint: TextView
+    private var trackpadVisible = false
     private var lastCandidates: Array<CandidateProto> = emptyArray()
 
     /** 当前候选条是英文补全给的（不是 Rime 的中文候选）。 */
@@ -237,6 +243,36 @@ class KeyboardWindow(di: DI) :
             ),
         )
 
+        // 空格长按时的轻量触控板提示；不接收触摸，拖动事件继续由 KeyView 处理。
+        trackpadHint =
+            TextView(context).apply {
+                setText(R.string.keyboard_trackpad_hint)
+                setTextColor(Color.WHITE)
+                textSize = 13f
+                gravity = Gravity.CENTER
+                setPadding(context.dp(16), 0, context.dp(16), 0)
+                background =
+                    GradientDrawable().apply {
+                        cornerRadius = context.dp(18).toFloat()
+                        setColor(0xCC161616.toInt())
+                    }
+                elevation = context.dp(6).toFloat()
+                isClickable = false
+                isFocusable = false
+                isLongClickable = false
+                isSoundEffectsEnabled = false
+                visibility = View.GONE
+                alpha = 0f
+            }
+        keyArea.addView(
+            trackpadHint,
+            FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                context.dp(34),
+                Gravity.TOP or Gravity.CENTER_HORIZONTAL,
+            ).apply { topMargin = context.dp(10) },
+        )
+
         // 顶栏放在键盘自己的布局里，而不是塞到 InputView 的顶栏槽位——
         // 后者会和 preedit 争高度，实测会把工具条顶出窗口上沿切掉一截。
         return LinearLayout(context).apply {
@@ -289,7 +325,32 @@ class KeyboardWindow(di: DI) :
         runBlocking { _currentKeyboardHeight.emit(keysHeight + chrome) }
     }
 
+    private fun setTrackpadActive(active: Boolean) {
+        if (!::trackpadHint.isInitialized || trackpadVisible == active) return
+        trackpadVisible = active
+        trackpadHint.animate().cancel()
+        keyboardView.animate().cancel()
+        if (active) {
+            trackpadHint.visibility = View.VISIBLE
+            trackpadHint.animate().alpha(1f).setDuration(90).start()
+            keyboardView.animate().alpha(0.22f).setDuration(120).start()
+        } else {
+            keyboardView.animate().alpha(1f).setDuration(120).start()
+            trackpadHint.animate().alpha(0f).setDuration(90).withEndAction {
+                if (trackpadHint.alpha == 0f) trackpadHint.visibility = View.GONE
+            }.start()
+        }
+    }
+
     private fun detachCurrentView() {
+        keyboardView.animate().cancel()
+        keyboardView.alpha = 1f
+        if (::trackpadHint.isInitialized) {
+            trackpadHint.animate().cancel()
+            trackpadHint.visibility = View.GONE
+            trackpadHint.alpha = 0f
+        }
+        trackpadVisible = false
         currentKeyboardView?.also {
             it.onDetach()
             keyboardView.removeView(it)
@@ -371,6 +432,7 @@ class KeyboardWindow(di: DI) :
         }
 
         view.let {
+            it.onTrackpadStateChanged = { active -> setTrackpadActive(active) }
             keyboardView.apply {
                 (it.parent as? android.view.ViewGroup)?.removeView(it)
                 add(it, lParams(matchParent, matchParent))
