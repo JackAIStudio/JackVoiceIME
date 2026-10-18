@@ -27,13 +27,19 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updatePadding
+import androidx.lifecycle.lifecycleScope
 import com.osfans.trime.BuildConfig
 import com.osfans.trime.R
 import com.osfans.trime.ime.voice.VoiceDictionary
 import com.osfans.trime.ime.voice.VoiceHistory
 import com.osfans.trime.ime.voice.VoicePrefs
 import com.osfans.trime.ime.voice.VoiceStats
+import com.osfans.trime.ime.voice.VolcHotwordApi
 import com.osfans.trime.ui.main.MainActivity
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import timber.log.Timber
 import java.text.SimpleDateFormat
 import java.util.Calendar
 import java.util.Date
@@ -370,9 +376,10 @@ class JackVoiceActivity : AppCompatActivity() {
 
     private fun iconText(
         label: String,
+        color: Int = Jv.TEXT2,
         onClick: () -> Unit,
     ): TextView =
-        Jv.text(this, label, 14f, Jv.TEXT2).apply {
+        Jv.text(this, label, 14f, color).apply {
             setPadding(Jv.dp(this@JackVoiceActivity, 10), Jv.dp(this@JackVoiceActivity, 6), Jv.dp(this@JackVoiceActivity, 10), Jv.dp(this@JackVoiceActivity, 6))
             isClickable = true
             setOnClickListener { onClick() }
@@ -381,19 +388,60 @@ class JackVoiceActivity : AppCompatActivity() {
     private fun toast(msg: String) =
         android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show()
 
+    /**
+     * 热词改动后同步整张云端热词表；没配置表 ID 时只保存在本地。
+     * 自动同步失败不拦本地修改，只提示一次。
+     */
+    private fun syncHotwords(manual: Boolean = false) {
+        val tableId = VoicePrefs.boostingTableId(this)
+        val apiKey = VoicePrefs.apiKey(this)
+        if (tableId.isBlank()) {
+            if (manual) toast("先填写云端热词表 ID")
+            return
+        }
+        if (apiKey.isBlank()) {
+            if (manual) toast("先填写火山 API Key")
+            return
+        }
+        val words = VoiceDictionary.hotwords(this)
+        if (words.isEmpty()) {
+            if (manual) toast("没有可同步的热词")
+            return
+        }
+        if (manual) toast("正在同步 ${words.size} 条热词…")
+        lifecycleScope.launch {
+            val result =
+                withContext(Dispatchers.IO) {
+                    VolcHotwordApi.updateBoostingTable(apiKey, tableId, words)
+                }
+            result
+                .onSuccess {
+                    Timber.i("热词表同步成功：${words.size} 条")
+                    if (manual) toast("已同步 ${words.size} 条热词到云端")
+                }.onFailure {
+                    Timber.e(it, "热词表同步失败")
+                    toast("热词已保存在本地；云端同步失败：${it.message ?: "未知错误"}")
+                }
+        }
+    }
+
     // ── 词典 ────────────────────────────────────────────────────────────
 
     private fun dictionaryPage(): View {
         val col = Jv.column(this)
         col.addView(Jv.pageTitle(this, "词典"))
 
-        val builtinCount = VoiceDictionary.builtinHotwords(this).size
-        val mine = VoiceDictionary.userHotwords(this)
+        val userHotwords = VoiceDictionary.userHotwords(this)
+        val userRules = VoiceDictionary.userRules(this)
+        val allHotwords = VoiceDictionary.hotwords(this)
+        val allRules = VoiceDictionary.rules(this)
+        val hotwords = if (onlyMine) userHotwords else allHotwords
+        val rules = if (onlyMine) userRules else allRules
+
         col.addView(
             Jv.text(
                 this,
-                "内置 $builtinCount 条热词 + ${VoiceDictionary.builtinRules(this).size} 条替换规则，" +
-                    "识别时一并送给引擎。下面也可以自己加。",
+                "热词负责听准，替换词只在终稿后本地生效。当前 ${allHotwords.size} 条热词、${allRules.size} 条替换规则。",
                 13f,
                 Jv.TEXT2,
             ).apply {
@@ -407,8 +455,20 @@ class JackVoiceActivity : AppCompatActivity() {
                 background = Jv.round(Jv.CARD, Jv.dp(this@JackVoiceActivity, 12))
                 setPadding(Jv.dp(this@JackVoiceActivity, 4), Jv.dp(this@JackVoiceActivity, 4), Jv.dp(this@JackVoiceActivity, 4), Jv.dp(this@JackVoiceActivity, 4))
             }
-        seg.addView(segment("全部", !onlyMine) { onlyMine = false; select(Tab.Dictionary) }, weight())
-        seg.addView(segment("我的（${mine.size}）", onlyMine) { onlyMine = true; select(Tab.Dictionary) }, weight())
+        seg.addView(
+            segment("全部", !onlyMine) {
+                onlyMine = false
+                select(Tab.Dictionary)
+            },
+            weight(),
+        )
+        seg.addView(
+            segment("我的", onlyMine) {
+                onlyMine = true
+                select(Tab.Dictionary)
+            },
+            weight(),
+        )
         col.addView(
             seg,
             LinearLayout.LayoutParams(
@@ -420,42 +480,155 @@ class JackVoiceActivity : AppCompatActivity() {
             },
         )
 
-        val words = if (onlyMine) mine else VoiceDictionary.hotwords(this)
-        col.addView(Jv.sectionLabel(this, "热词 ${words.size} 条"))
-        val card = Jv.card(this)
-        words.forEachIndexed { i, w ->
-            val userAdded = w in mine
-            card.addView(
-                Jv.row(
-                    this,
-                    w,
-                    if (userAdded) "手动添加" else "内置",
-                ) {
-                    if (userAdded) {
-                        VoiceDictionary.removeHotword(this, w)
-                        select(Tab.Dictionary)
-                    }
-                },
-            )
-            if (i != words.lastIndex) card.addView(Jv.divider(this))
+        col.addView(Jv.sectionLabel(this, "热词 ${hotwords.size} 条"))
+        if (hotwords.isEmpty()) {
+            col.addView(dictionaryEmpty("还没有热词"))
+        } else {
+            val card = Jv.card(this)
+            val userKeys = userHotwords.map { it.lowercase() }.toSet()
+            hotwords.forEachIndexed { i, w ->
+                card.addView(hotwordRow(w, w.lowercase() in userKeys))
+                if (i != hotwords.lastIndex) card.addView(Jv.divider(this))
+            }
+            col.addView(card)
         }
-        col.addView(card)
-        col.addView(Jv.primaryButton(this, "添加词条") { addWordDialog() })
+        col.addView(Jv.primaryButton(this, "添加热词") { addWordDialog() })
+
+        col.addView(Jv.sectionLabel(this, "替换词 ${rules.size} 条"))
+        col.addView(
+            Jv.text(
+                this,
+                "英文忽略大小写、按整词匹配；空格和拼写要一致，同一位置长规则优先。",
+                12f,
+                Jv.TEXT2,
+            ).apply {
+                setPadding(Jv.dp(this@JackVoiceActivity, 24), 0, Jv.dp(this@JackVoiceActivity, 24), Jv.dp(this@JackVoiceActivity, 8))
+            },
+        )
+        if (rules.isEmpty()) {
+            col.addView(dictionaryEmpty("还没有替换词"))
+        } else {
+            val card = Jv.card(this)
+            rules.forEachIndexed { i, rule ->
+                card.addView(ruleRow(rule))
+                if (i != rules.lastIndex) card.addView(Jv.divider(this))
+            }
+            col.addView(card)
+        }
+        col.addView(Jv.primaryButton(this, "添加替换词") { editRuleDialog(null) })
         return Jv.page(col)
+    }
+
+    private fun dictionaryEmpty(text: String): TextView = Jv.text(this, text, 14f, Jv.TEXT2).apply {
+        setPadding(
+            Jv.dp(this@JackVoiceActivity, 20),
+            Jv.dp(this@JackVoiceActivity, 10),
+            Jv.dp(this@JackVoiceActivity, 20),
+            Jv.dp(this@JackVoiceActivity, 10),
+        )
     }
 
     private fun segment(
         label: String,
         active: Boolean,
         onClick: () -> Unit,
-    ): TextView =
-        Jv.text(this, label, 14f, if (active) Jv.TEXT else Jv.TEXT2, bold = active).apply {
-            gravity = Gravity.CENTER
-            setPadding(0, Jv.dp(this@JackVoiceActivity, 8), 0, Jv.dp(this@JackVoiceActivity, 8))
-            if (active) background = Jv.round(0xFFFFFFFF.toInt(), Jv.dp(this@JackVoiceActivity, 9))
-            isClickable = true
-            setOnClickListener { onClick() }
-        }
+    ): TextView = Jv.text(this, label, 14f, if (active) Jv.TEXT else Jv.TEXT2, bold = active).apply {
+        gravity = Gravity.CENTER
+        setPadding(0, Jv.dp(this@JackVoiceActivity, 8), 0, Jv.dp(this@JackVoiceActivity, 8))
+        if (active) background = Jv.round(0xFFFFFFFF.toInt(), Jv.dp(this@JackVoiceActivity, 9))
+        isClickable = true
+        setOnClickListener { onClick() }
+    }
+
+    private fun hotwordRow(
+        word: String,
+        userAdded: Boolean,
+    ): View {
+        val box =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(Jv.dp(this@JackVoiceActivity, 18), Jv.dp(this@JackVoiceActivity, 12), Jv.dp(this@JackVoiceActivity, 12), Jv.dp(this@JackVoiceActivity, 12))
+            }
+        val column =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+            }
+        column.addView(Jv.text(this, word, 16f))
+        column.addView(
+            Jv.text(this, if (userAdded) "手动添加" else "内置", 12f, Jv.TEXT2).apply {
+                setPadding(0, Jv.dp(this@JackVoiceActivity, 5), 0, 0)
+            },
+        )
+        box.addView(column, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        box.addView(iconText("删除", Jv.DANGER) { confirmRemoveHotword(word) })
+        return box
+    }
+
+    private fun ruleRow(rule: VoiceDictionary.Rule): View {
+        val box =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(Jv.dp(this@JackVoiceActivity, 18), Jv.dp(this@JackVoiceActivity, 12), Jv.dp(this@JackVoiceActivity, 8), Jv.dp(this@JackVoiceActivity, 12))
+            }
+        val column =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+            }
+        column.addView(Jv.text(this, "${rule.from}  →  ${rule.to}", 15f))
+        column.addView(
+            Jv.text(this, if (rule.builtin) "内置替换" else "手动替换", 12f, Jv.TEXT2).apply {
+                setPadding(0, Jv.dp(this@JackVoiceActivity, 5), 0, 0)
+            },
+        )
+        box.addView(column, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        box.addView(iconText(if (rule.builtin) "覆盖" else "编辑") { editRuleDialog(rule) })
+        box.addView(iconText("删除", Jv.DANGER) { confirmRemoveRule(rule) })
+        return box
+    }
+
+    private fun confirmRemoveHotword(word: String) {
+        val builtin = VoiceDictionary.builtinHotwords(this).any { it.equals(word, ignoreCase = true) }
+        val mine = VoiceDictionary.userHotwords(this).any { it.equals(word, ignoreCase = true) }
+        val message =
+            when {
+                builtin && mine -> "「$word」会被隐藏，并从你的词库里移除。"
+                builtin -> "「$word」会从内置词库中隐藏，之后仍可手动加回来。"
+                else -> "「$word」会从你的词库中删除。"
+            }
+        val syncNote =
+            if (VoicePrefs.boostingTableId(this).isNotBlank()) "云端热词表会一起更新。" else ""
+        AlertDialog
+            .Builder(this)
+            .setTitle("删除热词？")
+            .setMessage(message + syncNote)
+            .setPositiveButton("删除") { _, _ ->
+                VoiceDictionary.removeHotword(this, word)
+                syncHotwords()
+                select(Tab.Dictionary)
+            }.setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun confirmRemoveRule(rule: VoiceDictionary.Rule) {
+        val builtin = VoiceDictionary.builtinRules(this).any { it.from.equals(rule.from, ignoreCase = true) }
+        val message =
+            if (builtin) {
+                "「${rule.from} → ${rule.to}」会从词库中移除，同来源的内置规则也不会再出现。"
+            } else {
+                "「${rule.from} → ${rule.to}」会从你的词库里删除。"
+            }
+        AlertDialog
+            .Builder(this)
+            .setTitle("删除替换词？")
+            .setMessage(message)
+            .setPositiveButton("删除") { _, _ ->
+                VoiceDictionary.removeRule(this, rule.from)
+                select(Tab.Dictionary)
+            }.setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
 
     private fun addWordDialog() {
         val input =
@@ -464,15 +637,103 @@ class JackVoiceActivity : AppCompatActivity() {
                 inputType = InputType.TYPE_CLASS_TEXT
                 setSingleLine()
             }
-        AlertDialog
-            .Builder(this)
-            .setTitle("添加词条")
-            .setView(input)
-            .setPositiveButton("添加") { _, _ ->
-                VoiceDictionary.addHotword(this, input.text.toString())
-                select(Tab.Dictionary)
-            }.setNegativeButton(android.R.string.cancel, null)
-            .show()
+        val dialog =
+            AlertDialog
+                .Builder(this)
+                .setTitle("添加热词")
+                .setMessage(
+                    "会按火山识别形保存：空格和标点去掉，例如 B roll → Broll。" +
+                        if (VoicePrefs.boostingTableId(this).isNotBlank()) "保存后会同步到云端热词表。" else "",
+                )
+                .setView(input)
+                .setPositiveButton("添加", null)
+                .setNegativeButton(android.R.string.cancel, null)
+                .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                if (VoiceDictionary.addHotword(this, input.text.toString())) {
+                    dialog.dismiss()
+                    syncHotwords()
+                    select(Tab.Dictionary)
+                } else {
+                    input.error = "只能包含文字和数字，最长 32 个字符"
+                }
+            }
+        }
+        dialog.show()
+    }
+
+    private fun editRuleDialog(rule: VoiceDictionary.Rule?) {
+        val fromInput =
+            EditText(this).apply {
+                hint = "听写里实际出现的内容，例如 Broll"
+                inputType = InputType.TYPE_CLASS_TEXT
+                setSingleLine()
+                setText(rule?.from.orEmpty())
+            }
+        val toInput =
+            EditText(this).apply {
+                hint = "你希望的写法，例如 B roll"
+                inputType = InputType.TYPE_CLASS_TEXT
+                setSingleLine()
+                setText(rule?.to.orEmpty())
+            }
+        val box =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(Jv.dp(this@JackVoiceActivity, 20), Jv.dp(this@JackVoiceActivity, 8), Jv.dp(this@JackVoiceActivity, 20), 0)
+                addView(Jv.text(this@JackVoiceActivity, "识别结果", 12f, Jv.TEXT2))
+                addView(fromInput)
+                addView(
+                    Jv.text(this@JackVoiceActivity, "替换为", 12f, Jv.TEXT2).apply {
+                        setPadding(0, Jv.dp(this@JackVoiceActivity, 12), 0, 0)
+                    },
+                )
+                addView(toInput)
+                addView(
+                    Jv.text(
+                        this@JackVoiceActivity,
+                        "英文忽略大小写，空格和拼写要一致；同一位置更长的规则优先。",
+                        12f,
+                        Jv.TEXT2,
+                    ).apply {
+                        setPadding(0, Jv.dp(this@JackVoiceActivity, 10), 0, 0)
+                    },
+                )
+            }
+        val dialog =
+            AlertDialog
+                .Builder(this)
+                .setTitle(if (rule == null) "添加替换词" else "编辑替换词")
+                .setView(box)
+                .setPositiveButton(if (rule == null) "添加" else "保存", null)
+                .setNegativeButton(android.R.string.cancel, null)
+                .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val from = fromInput.text.toString().trim()
+                val to = toInput.text.toString().trim()
+                if (from.isEmpty()) {
+                    fromInput.error = "不能为空"
+                    return@setOnClickListener
+                }
+                if (to.isEmpty()) {
+                    toInput.error = "不能为空"
+                    return@setOnClickListener
+                }
+                val ok =
+                    if (rule == null) {
+                        VoiceDictionary.addRule(this, from, to)
+                    } else {
+                        VoiceDictionary.updateRule(this, rule.from, from, to)
+                    }
+                if (ok) {
+                    dialog.dismiss()
+                    select(Tab.Dictionary)
+                }
+            }
+        }
+        dialog.show()
     }
 
     // ── 设置 ────────────────────────────────────────────────────────────
@@ -498,12 +759,47 @@ class JackVoiceActivity : AppCompatActivity() {
             Jv.row(
                 this,
                 "热词增强",
-                "把 ${VoiceDictionary.hotwords(this).size} 条热词一起送给识别引擎",
+                "开启后优先用云端热词表；未配置时直传本地热词",
                 trailing = if (VoicePrefs.hotwordsEnabled(this)) "开" else "关",
             ) {
                 VoicePrefs.setHotwordsEnabled(this, !VoicePrefs.hotwordsEnabled(this))
                 select(Tab.Settings)
             },
+        )
+        voice.addView(Jv.divider(this))
+        val boostingTableId = VoicePrefs.boostingTableId(this)
+        voice.addView(
+            Jv.row(
+                this,
+                "云端热词表",
+                if (boostingTableId.isBlank()) {
+                    "未设置：本地热词按 100 字符预算直传"
+                } else {
+                    "使用云端热词表，优先于本地直传"
+                },
+                trailing = if (boostingTableId.isBlank()) "未设置" else "已配置",
+                chevron = true,
+            ) { editBoostingTableDialog() },
+        )
+        voice.addView(Jv.divider(this))
+        voice.addView(
+            Jv.row(
+                this,
+                "同步热词表",
+                "把当前 ${VoiceDictionary.hotwords(this).size} 条热词整体覆盖到云端",
+                trailing = "同步",
+                chevron = true,
+            ) { syncHotwords(manual = true) },
+        )
+        voice.addView(Jv.divider(this))
+        voice.addView(
+            Jv.row(
+                this,
+                "替换词",
+                "只在本机终稿后执行，不上传云端",
+                trailing = "${VoiceDictionary.rules(this).size} 条",
+                chevron = true,
+            ) { select(Tab.Dictionary) },
         )
         voice.addView(Jv.divider(this))
         voice.addView(
@@ -560,8 +856,31 @@ class JackVoiceActivity : AppCompatActivity() {
         return Jv.page(col)
     }
 
-    private fun maskKey(key: String): String =
-        if (key.length <= 8) "已填写" else key.take(4) + "…" + key.takeLast(4)
+    private fun maskKey(key: String): String = if (key.length <= 8) "已填写" else key.take(4) + "…" + key.takeLast(4)
+
+    private fun editBoostingTableDialog() {
+        val input =
+            EditText(this).apply {
+                inputType = InputType.TYPE_CLASS_TEXT
+                setText(VoicePrefs.boostingTableId(this@JackVoiceActivity))
+                hint = "留空则使用请求级热词直传"
+                setSingleLine()
+                typeface = Typeface.MONOSPACE
+            }
+        AlertDialog
+            .Builder(this)
+            .setTitle("云端热词表 ID")
+            .setMessage(
+                "填桌面版 JackVoice settings.json 里的 volcBoostingTableId，两边就会用同一张热词表。" +
+                    "留空则把本地热词直传给识别请求（最多 100 字符）。",
+            )
+            .setView(input)
+            .setPositiveButton("保存") { _, _ ->
+                VoicePrefs.setBoostingTableId(this, input.text.toString())
+                select(Tab.Settings)
+            }.setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
 
     private fun editKeyDialog() {
         val input =

@@ -1,165 +1,118 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Jack
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+
 package com.osfans.trime.ime.voice
 
 /**
- * 替换规则引擎。
+ * 终稿替换引擎，逐条对齐桌面版 `hotwords.rs` 的 `apply_replacements`。
  *
- * 逐字对齐 `plugin/src/libs/replace.ts`（已在 Xime 插件里实测 25/25 通过），
- * 语义与 JackVoice 一致：
- *   - 英文/数字按「整词边界」匹配（`cloud` 不命中 `cloudy`）
- *   - 中文按连续文字匹配
- *   - 最长匹配优先（`Agent Board` 先于 `Board`）
- *   - 已产出的结果**不会被后续规则二次误伤**（`Cloud → Claude` 之后 Claude 不再被改写）
- *   - `from == to` 视为短语锁，只保护不改写
+ * 语义：
+ *   - 英文字母和数字只在整词边界上替换（`Cloud` 不会钻进 `iCloud`）；
+ *   - 中文按连续文字匹配；
+ *   - 单次从左到右扫描，同一位置取最长的规则；
+ *   - 已经产出的结果不会在后续位置被短规则二次改写；
+ *   - `from == to` 是短语锁，只消耗匹配、不改写。
  *
- * 实现用私有区占位符把「已产出的结果」锚住，全部规则跑完再还原。
+ * 注意：这里不做空格容忍——桌面版要求空格、标点和拼写一致。
  */
 object ReplacementEngine {
-
-    private const val PH_OPEN = '\uE000'
-    private const val PH_CLOSE = '\uE001'
-
     data class Rule(val from: String, val to: String)
 
     data class Result(val text: String, val appliedCount: Int, val applied: List<Rule>)
 
-    private val wholeWordRegex = Regex("^[0-9A-Za-z_][0-9A-Za-z_ ]*[0-9A-Za-z_]$|^[0-9A-Za-z_]$")
+    private data class Pattern(val chars: CharArray, val rule: Rule)
 
-    private fun isWholeWordPattern(from: String): Boolean = wholeWordRegex.matches(from)
-
-    /** 逐字符转义正则元字符，避免在 Kotlin 字符串里写 `$` 模板 */
-    private val regexSpecials = charArrayOf(
-        '.', '*', '+', '?', '^', '$', '{', '}', '(', ')', '|', '[', ']', '\\'
-    )
-
-    private fun escapeRegExp(s: String): String {
-        val sb = StringBuilder(s.length * 2)
-        for (ch in s) {
-            if (regexSpecials.contains(ch)) sb.append('\\')
-            sb.append(ch)
-        }
-        return sb.toString()
-    }
-
-    fun apply(text: String, rules: List<Rule>): Result {
-        if (text.isEmpty() || rules.isEmpty()) return Result(text, 0, emptyList())
-
-        val usable = rules
-            .filter { it.from.isNotEmpty() }
-            .sortedByDescending { it.from.length }
-
-        var working = text
-        val applied = mutableListOf<Rule>()
-
-        for (rule in usable) {
-            if (rule.from == rule.to) {
-                // 短语锁：锚住正确写法，让后续规则无法命中
-                val locked = replaceOnce(working, rule.from) { anchor(it) }
-                if (locked != null) working = locked
+    /**
+     * 清洗用户规则：去首尾空白、丢弃空项、忽略大小写合并同一来源、长来源优先。
+     * 同一来源后写的目标覆盖先写的目标，展示时保留第一次录入的 from 写法。
+     */
+    fun sanitize(rules: List<Rule>): List<Rule> {
+        val out = ArrayList<Rule>()
+        val indexes = HashMap<String, Int>()
+        for (rule in rules) {
+            val from = rule.from.trim()
+            val to = rule.to.trim()
+            if (from.isEmpty() || to.isEmpty()) continue
+            val key = from.lowercase()
+            val index = indexes[key]
+            if (index != null) {
+                out[index] = out[index].copy(to = to)
                 continue
             }
-            val res = replaceOnce(working, rule.from) { anchor(rule.to) }
-            if (res != null) {
-                working = res
-                applied += rule
-            }
+            indexes[key] = out.size
+            out += Rule(from, to)
         }
-
-        return Result(unanchor(working), applied.size, applied)
+        return out.sortedByDescending { it.from.length }
     }
 
-    /** 只替换「未被锚定」的部分；无匹配返回 null */
-    private fun replaceOnce(
-        haystack: String,
-        needle: String,
-        makeReplacement: (String) -> String,
-    ): String? {
-        val wholeWord = isWholeWordPattern(needle)
-        // 空格容忍：识别结果里空格数不稳定
-        val body = escapeRegExp(needle).replace(" ", "\\s+")
-        val pattern = if (wholeWord) "(?<![0-9A-Za-z_])$body(?![0-9A-Za-z_])" else body
-        val re = try {
-            Regex(pattern, RegexOption.IGNORE_CASE)
-        } catch (e: Exception) {
-            return null
-        }
+    fun apply(
+        text: String,
+        rules: List<Rule>,
+    ): Result {
+        if (text.isEmpty() || rules.isEmpty()) return Result(text, 0, emptyList())
 
-        var matched = false
-        val parts = splitByAnchors(haystack)
-        val out = parts.joinToString("") { part ->
-            if (part.anchored) {
-                part.text
+        val patterns =
+            sanitize(rules).mapNotNull { rule ->
+                val lower = rule.from.lowercase()
+                if (lower.isEmpty()) null else Pattern(lower.toCharArray(), rule)
+            }
+        if (patterns.isEmpty()) return Result(text, 0, emptyList())
+
+        val chars = text.toCharArray()
+        val out = StringBuilder(text.length)
+        val applied = ArrayList<Rule>()
+        var i = 0
+        while (i < chars.size) {
+            var bestLen = 0
+            var best: Rule? = null
+            for (pattern in patterns) {
+                val length = pattern.chars.size
+                if (length <= bestLen || i + length > chars.size) continue
+                var matched = true
+                for (offset in 0 until length) {
+                    if (chars[i + offset].lowercaseChar() != pattern.chars[offset]) {
+                        matched = false
+                        break
+                    }
+                }
+                if (matched && latinMatchIsBounded(chars, i, i + length)) {
+                    bestLen = length
+                    best = pattern.rule
+                }
+            }
+            val chosen = best
+            if (chosen == null) {
+                out.append(chars[i])
+                i += 1
             } else {
-                re.replace(part.text) { m ->
-                    matched = true
-                    makeReplacement(m.value)
+                out.append(chosen.to)
+                i += bestLen
+                if (applied.none { it.from == chosen.from && it.to == chosen.to }) {
+                    applied += chosen
                 }
             }
         }
-        return if (matched) out else null
+        return Result(out.toString(), applied.size, applied)
     }
-
-    private data class Part(val anchored: Boolean, val text: String)
-
-    private fun splitByAnchors(s: String): List<Part> {
-        val parts = mutableListOf<Part>()
-        var i = 0
-        while (i < s.length) {
-            val open = s.indexOf(PH_OPEN, i)
-            if (open == -1) {
-                parts += Part(false, s.substring(i))
-                break
-            }
-            if (open > i) parts += Part(false, s.substring(i, open))
-            val close = s.indexOf(PH_CLOSE, open + 1)
-            if (close == -1) {
-                parts += Part(false, s.substring(open))
-                break
-            }
-            parts += Part(true, s.substring(open, close + 1))
-            i = close + 1
-        }
-        return parts
-    }
-
-    private fun anchor(s: String): String =
-        PH_OPEN + s.replace(PH_OPEN.toString(), "").replace(PH_CLOSE.toString(), "") + PH_CLOSE
-
-    private fun unanchor(s: String): String =
-        s.replace(PH_OPEN.toString(), "").replace(PH_CLOSE.toString(), "")
 
     /**
-     * 解析多行替换规则。每行一条，支持：
-     *   from => to / from -> to / from=to / from（单独一行 = 短语锁）
-     * `#` 或 `//` 开头的行忽略。
+     * 拉丁字母/数字按整词边界；规则两端是中文等非 ASCII 字符时不加边界。
+     * 下划线、连字符、空格、标点都算边界，和桌面版一致。
      */
-    fun parseRules(raw: String): List<Rule> {
-        val out = mutableListOf<Rule>()
-        for (lineRaw in raw.split(Regex("\\r?\\n"))) {
-            val line = lineRaw.trim()
-            if (line.isEmpty() || line.startsWith("#") || line.startsWith("//")) continue
-            val m = Regex("^(.*?)\\s*=>\\s*(.*)$").find(line)
-                ?: Regex("^(.*?)\\s*->\\s*(.*)$").find(line)
-                ?: Regex("^(.*?)\\s*=\\s*(.*)$").find(line)
-            if (m != null) {
-                val from = m.groupValues[1].trim()
-                val to = m.groupValues[2].trim()
-                if (from.isNotEmpty()) out += Rule(from, to.ifEmpty { from })
-            } else {
-                out += Rule(line, line)
-            }
-        }
-        return out
+    private fun latinMatchIsBounded(
+        chars: CharArray,
+        start: Int,
+        end: Int,
+    ): Boolean {
+        if (start >= end || end > chars.size) return false
+        val startsWithWord = chars[start].isAsciiWord()
+        val endsWithWord = chars[end - 1].isAsciiWord()
+        if (startsWithWord && start > 0 && chars[start - 1].isAsciiWord()) return false
+        if (endsWithWord && end < chars.size && chars[end].isAsciiWord()) return false
+        return true
     }
 
-    /** 解析热词：每行一条，去空行与注释，保序去重 */
-    fun parseHotwords(raw: String): List<String> {
-        val seen = mutableSetOf<String>()
-        val out = mutableListOf<String>()
-        for (lineRaw in raw.split(Regex("\\r?\\n"))) {
-            val t = lineRaw.trim()
-            if (t.isEmpty() || t.startsWith("#") || t.startsWith("//")) continue
-            if (seen.add(t)) out += t
-        }
-        return out
-    }
+    private fun Char.isAsciiWord(): Boolean = this in 'a'..'z' || this in 'A'..'Z' || this in '0'..'9'
 }

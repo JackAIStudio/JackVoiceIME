@@ -14,8 +14,8 @@ import java.util.concurrent.TimeUnit
 /**
  * 豆包（火山引擎）双向流式识别客户端。
  *
- * 端点、请求头、热词注入方式与 `plugin/`（Xime 插件版）完全一致——
- * 两边共用同一套 API Key、Resource ID、热词库，改一处两边都变。
+ * 端点、请求头与桌面版一致；热词优先走云端热词表，未配置表 ID 时
+ * 按请求级直传（归一化 + 100 字符预算）。
  *
  * 线程约定：feed() 由录音线程调用；回调在 OkHttp 线程触发，调用方自行切线程。
  */
@@ -28,6 +28,8 @@ class VolcAsrClient(
         val apiKey: String,
         val resourceId: String = VolcProtocol.DEFAULT_RESOURCE_ID,
         val hotwords: List<String> = emptyList(),
+        /** 云端热词表 ID；非空时优先整表生效，忽略 [hotwords]。 */
+        val boostingTableId: String = "",
         val uid: String = "jackvoice",
         /** 二遍终稿：停止后服务端再给一次更准的非流式结果 */
         val enableNonstream: Boolean = true,
@@ -84,6 +86,7 @@ class VolcAsrClient(
                 Log.i(TAG, "火山连接已建立")
                 val json = VolcProtocol.buildFullClientRequestJson(
                     hotwords = config.hotwords,
+                    boostingTableId = config.boostingTableId,
                     uid = config.uid,
                     enableNonstream = config.enableNonstream,
                 )

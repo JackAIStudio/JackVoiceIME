@@ -88,6 +88,7 @@ object VoiceEngine {
                     apiKey = key,
                     resourceId = VoicePrefs.resourceId(ctx),
                     hotwords = if (VoicePrefs.hotwordsEnabled(ctx)) VoiceDictionary.hotwords(ctx) else emptyList(),
+                    boostingTableId = if (VoicePrefs.hotwordsEnabled(ctx)) VoicePrefs.boostingTableId(ctx) else "",
                 ),
                 object : VolcAsrClient.Listener {
                     override fun onPartial(text: String) {

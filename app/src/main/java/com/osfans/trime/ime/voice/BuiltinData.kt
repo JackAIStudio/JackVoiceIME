@@ -5,8 +5,8 @@ import org.json.JSONArray
 
 /**
  * 内置词库。数据来自 `app/src/main/assets/`，
- * 由 `plugin/src/data/` 的同一份源数据转换而来（59 条热词 + 76 条替换规则），
- * 保证 App 与 Xime 插件行为一致。
+ * 由 `lexicon/src/` 下的 .ts 导出（当前 59 条热词 + 76 条替换规则），
+ * 源头是桌面版 JackVoice 的共享词库。
  */
 object BuiltinData {
 

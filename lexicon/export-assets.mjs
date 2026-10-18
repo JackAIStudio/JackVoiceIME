@@ -7,7 +7,8 @@
  * 手动跑：node lexicon/export-assets.mjs
  *
  * 这两个 .ts 是**唯一源头**（原来放在 JackAndroidVoice 的 plugin/src/data/，
- * 那个仓已归档）。改词库只改这里，再跑一次脚本。
+ * 那个仓已归档）。可以从桌面版重新生成：node lexicon/import-desktop.mjs。
+ * 改完 .ts 再跑一次本脚本。
  */
 
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';

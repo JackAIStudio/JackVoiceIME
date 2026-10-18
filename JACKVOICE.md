@@ -84,7 +84,7 @@ q w e r t y u i o p        ← 按键
 
 ```
 点大圆 → 麦克风前台服务 → 16kHz 单声道录音 → 豆包流式（59 条热词）
-      → 二遍终稿 → 79 条替换规则 → commitText 落到当前输入框
+      → 二遍终稿 → 76 条替换规则 → commitText 落到当前输入框
 ```
 
 录音圆里的波形跟着真实音量走：`VoiceLevel` 用每块 PCM 的 RMS 减去一条会自己跟的
@@ -172,13 +172,19 @@ Resource deadlock avoided                        # 连 mv / rm 都会被锁住
 
 ## 词库
 
-`lexicon/src/*.ts` 是唯一源头，`app/src/main/assets/*.json` 是生成物：
+`lexicon/src/` 下的 `.ts` 是唯一源头，`app/src/main/assets/*.json` 是生成物。
+想从桌面版重新抄一遍词库：
 
 ```sh
+node lexicon/import-desktop.mjs    # 读桌面版共享数据目录，重写 .ts
 node lexicon/export-assets.mjs     # 输出与仓库文件字节一致，不会制造垃圾 diff
 ```
 
 改词库只改 `.ts`，再跑一次脚本。
+
+热词表和桌面版共用：设置里填桌面版 `settings.json` 里的 `volcBoostingTableId`，
+识别请求就直接用云端表；在词典页增删热词会整表覆盖同步上去。替换词只在本地
+终稿后执行，不会上传云端。
 
 ## 与 JackAndroidVoice 的关系
 

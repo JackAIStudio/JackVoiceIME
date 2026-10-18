@@ -1,7 +1,7 @@
-// 从 JackVoice replacements.json 转换而来（76 条）
+// 从 JackVoice 桌面版 replacements.json 导入（76 条）
 // 源: ~/Library/Application Support/com.jackvoice.shared/replacements.json
 // 语义: from → to。from==to 视为「短语锁」，保护该写法不被其它规则误伤。
-// 重新生成: node tools/convert-data.mjs
+// 重新生成: node lexicon/import-desktop.mjs && node lexicon/export-assets.mjs
 
 export interface ReplacementRule {
   from: string;
@@ -9,9 +9,6 @@ export interface ReplacementRule {
 }
 
 export const DEFAULT_REPLACEMENTS: ReplacementRule[] = [
-  { from: "Agentboard", to: "AgenBoard" },
-  { from: "agentboard", to: "AgenBoard" },
-  { from: "AgentBoard", to: "AgenBoard" },
   { from: "da vinci playground", to: "DaVinci Playground" },
   { from: "DaVinci Playground", to: "DaVinci Playground" },
   { from: "DaVinciPlayground", to: "DaVinci Playground" },

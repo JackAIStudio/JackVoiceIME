@@ -170,6 +170,7 @@ object VolcProtocol {
     /** 构造建连后的第一包（含识别参数与热词）。 */
     fun buildFullClientRequestJson(
         hotwords: List<String>,
+        boostingTableId: String = "",
         uid: String,
         enableNonstream: Boolean = true,
         sampleRate: Int = SAMPLE_RATE,
@@ -187,14 +188,22 @@ object VolcProtocol {
             put("enable_nonstream", enableNonstream)
         }
 
-        if (hotwords.isNotEmpty()) {
-            val arr = org.json.JSONArray()
-            hotwords.forEach { arr.put(org.json.JSONObject().put("word", it)) }
-            // 对齐 AgenBoard：request.corpus.context 是 **JSON 字符串**（双层嵌套）
-            request.put(
-                "corpus",
-                org.json.JSONObject().put("context", org.json.JSONObject().put("hotwords", arr).toString())
-            )
+        val tableId = boostingTableId.trim()
+        if (tableId.isNotEmpty()) {
+            // 与桌面版一致：配置了云端热词表就整表生效，不再直传热词。
+            request.put("corpus", org.json.JSONObject().put("boosting_table_id", tableId))
+        } else {
+            // 请求级直传：归一化 + 100 字符预算，避免把整份词库原样塞进去。
+            val words = HotwordSanitizer.inline(hotwords)
+            if (words.isNotEmpty()) {
+                val arr = org.json.JSONArray()
+                words.forEach { arr.put(org.json.JSONObject().put("word", it)) }
+                // 对齐 AgenBoard：request.corpus.context 是 **JSON 字符串**（双层嵌套）
+                request.put(
+                    "corpus",
+                    org.json.JSONObject().put("context", org.json.JSONObject().put("hotwords", arr).toString())
+                )
+            }
         }
 
         val root = org.json.JSONObject().apply {

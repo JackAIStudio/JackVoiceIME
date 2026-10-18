@@ -4,6 +4,8 @@
  */
 @file:Suppress("UnstableApiUsage")
 
+import java.util.Properties
+
 plugins {
     id("com.osfans.trime.app-convention")
     id("com.osfans.trime.native-app-convention")
@@ -15,6 +17,17 @@ plugins {
     alias(libs.plugins.kotlin.parcelize)
     alias(libs.plugins.ksp)
 }
+
+val localProperties =
+    Properties().apply {
+        val file = rootProject.file("local.properties")
+        if (file.isFile) file.inputStream().use(::load)
+    }
+val volcBoostingTableId =
+    System.getenv("JACKVOICE_BOOSTING_TABLE_ID")
+        ?: localProperties.getProperty("jackvoice.volcBoostingTableId", "")
+val escapedVolcBoostingTableId =
+    volcBoostingTableId.replace("\\", "\\\\").replace("\"", "\\\"")
 
 android {
     namespace = "com.osfans.trime"
@@ -34,6 +47,9 @@ android {
         buildConfigField("String", "BUILD_COMMIT_HASH", "\"${project.buildCommitHash}\"")
         buildConfigField("String", "BUILD_GIT_REPO", "\"${project.buildGitRepo}\"")
         buildConfigField("String", "BUILD_VERSION_NAME", "\"${project.buildVersionName}\"")
+        // 和桌面版共用热词表时，把 ID 写进 local.properties（不提交），
+        // 或提供 JACKVOICE_BOOSTING_TABLE_ID 环境变量。
+        buildConfigField("String", "VOLC_BOOSTING_TABLE_ID", "\"$escapedVolcBoostingTableId\"")
     }
 
     base {
