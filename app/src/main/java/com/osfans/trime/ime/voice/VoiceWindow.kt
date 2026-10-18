@@ -143,8 +143,8 @@ class VoiceWindow(di: DI) :
         tab?.let { VoicePrefs.setLastTab(context, it) }
     }
 
-    private fun actionLabel(): String {
-        val action = service.currentInputEditorInfo.imeOptions and EditorInfo.IME_MASK_ACTION
+    private fun actionLabel(info: EditorInfo = service.currentInputEditorInfo): String {
+        val action = info.imeOptions and EditorInfo.IME_MASK_ACTION
         return when (action) {
             EditorInfo.IME_ACTION_SEARCH -> "搜索"
             EditorInfo.IME_ACTION_GO -> "前往"
@@ -153,6 +153,17 @@ class VoiceWindow(di: DI) :
             EditorInfo.IME_ACTION_DONE -> "完成"
             else -> "换行"
         }
+    }
+
+    /**
+     * 换编辑器时要刷一次动作键标签。
+     *
+     * 面板只在 [onAttached] 里算过一次标签，而从一个 App 切到另一个 App 时键盘往往一直显示着、
+     * 面板并不 detach，那次计算不会再发生，底行就会留着上一个输入框的字（短信里是「发送」，
+     * 切到搜索框还写着「发送」）。[InputView.startInput] 会带着新的 `EditorInfo` 调到这里。
+     */
+    fun updateActionLabel(info: EditorInfo = service.currentInputEditorInfo) {
+        panel?.setActionLabel(actionLabel(info))
     }
 
     private fun performEditorAction() {

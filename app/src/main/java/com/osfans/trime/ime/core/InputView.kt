@@ -410,6 +410,9 @@ class InputView(
         restarting: Boolean = false,
     ) {
         updateEnterKeyLabel(info)
+        // 语音面板的动作键不走 EnterKeyDisplayDelegate，得单独喂一次新的 EditorInfo，
+        // 否则跨 App 切换时底行会留着上一个输入框的字。
+        voiceWindow.updateActionLabel(info)
         composingBar.setComposingText("")
         broadcaster.onStartInput(info)
         if (!restarting) {
