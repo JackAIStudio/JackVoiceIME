@@ -10,14 +10,20 @@ import androidx.core.content.edit
 import androidx.preference.PreferenceManager
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.UUID
 
 /**
- * 词典：内置热词/替换规则（打包在 assets 里）+ 用户自己加的。
+ * 词库：首次安装把 assets 里的默认词库灌进用户数据，之后所有条目都可编辑。
  *
- * 和桌面版一致，内置项也可以删：删内置热词只是把它加入隐藏列表，删内置替换词
- * 只是把这个来源加入隐藏列表；用户之后重新添加时再取消隐藏。
+ * 和桌面版一致，不再区分“内置/我的”。旧版本的 user/hidden 列表只在迁移时读一次，
+ * 保证已经删过或加过的词不会因为这次升级丢状态。
  */
 object VoiceDictionary {
+    private const val KEY_GLOSSARY_HOTWORDS = "voice_glossary_hotwords_v1"
+    private const val KEY_GLOSSARY_RULES = "voice_glossary_rules_v1"
+    private const val KEY_GLOSSARY_SEEDED = "voice_glossary_seeded_v1"
+
+    // 旧版本存储，仅用于迁移。
     private const val KEY_USER_HOTWORDS = "voice_user_hotwords"
     private const val KEY_HIDDEN_HOTWORDS = "voice_hidden_hotwords"
     private const val KEY_USER_RULES = "voice_user_rules"
@@ -26,44 +32,25 @@ object VoiceDictionary {
     data class Rule(
         val from: String,
         val to: String,
-        val builtin: Boolean,
     )
 
     // ── 热词 ────────────────────────────────────────────────────────────
 
-    fun builtinHotwords(ctx: Context): List<String> = HotwordSanitizer.sanitize(BuiltinData.hotwords(ctx))
-
-    fun userHotwords(ctx: Context): List<String> = HotwordSanitizer.sanitize(readList(ctx, KEY_USER_HOTWORDS))
-
     fun hotwords(ctx: Context): List<String> {
-        val hidden = hiddenHotwordKeys(ctx)
-        val builtin = builtinHotwords(ctx).filterNot { it.lowercase() in hidden }
-        return HotwordSanitizer.sanitize(builtin + userHotwords(ctx))
+        ensureSeeded(ctx)
+        return HotwordSanitizer.sanitize(readList(ctx, KEY_GLOSSARY_HOTWORDS))
     }
 
-    /**
-     * 添加热词。会按火山识别形归一化（`B roll` → `Broll`）。
-     *
-     * @return 词合法并已保存/本来就在词库里时为 true。
-     */
+    /** @return 词合法并已保存/本来就在词库里时为 true。 */
     fun addHotword(
         ctx: Context,
         word: String,
     ): Boolean {
         val cleaned = HotwordSanitizer.normalize(word)
         if (cleaned.isEmpty() || !HotwordSanitizer.isValid(cleaned)) return false
-        val key = cleaned.lowercase()
-
-        val hidden = hiddenHotwordKeys(ctx).toMutableSet()
-        val wasHidden = hidden.remove(key)
-        if (wasHidden) writeList(ctx, KEY_HIDDEN_HOTWORDS, hidden.toList())
-
-        val user = userHotwords(ctx)
-        if (user.any { it.lowercase() == key }) return true
-        // 内置词本来就在词库里：不重复写进用户列表，除非它是刚被恢复的。
-        if (!wasHidden && builtinHotwords(ctx).any { it.lowercase() == key }) return true
-
-        writeList(ctx, KEY_USER_HOTWORDS, user + cleaned)
+        val current = hotwords(ctx)
+        if (current.any { it.equals(cleaned, ignoreCase = true) }) return true
+        writeList(ctx, KEY_GLOSSARY_HOTWORDS, current + cleaned)
         return true
     }
 
@@ -73,72 +60,21 @@ object VoiceDictionary {
     ): Boolean {
         val key = word.trim().lowercase()
         if (key.isEmpty()) return false
-
-        val user = userHotwords(ctx)
-        val userHadIt = user.any { it.lowercase() == key }
-        if (userHadIt) {
-            writeList(ctx, KEY_USER_HOTWORDS, user.filterNot { it.lowercase() == key })
-        }
-
-        val builtinHadIt = builtinHotwords(ctx).any { it.lowercase() == key }
-        if (builtinHadIt) {
-            writeList(ctx, KEY_HIDDEN_HOTWORDS, (hiddenHotwordKeys(ctx) + key).toList())
-        }
-        return userHadIt || builtinHadIt
+        val current = hotwords(ctx)
+        val next = current.filterNot { it.lowercase() == key }
+        if (next.size == current.size) return false
+        writeList(ctx, KEY_GLOSSARY_HOTWORDS, next)
+        return true
     }
-
-    private fun hiddenHotwordKeys(ctx: Context): Set<String> = readList(ctx, KEY_HIDDEN_HOTWORDS)
-        .map { it.trim().lowercase() }
-        .filter { it.isNotEmpty() }
-        .toSet()
 
     // ── 替换规则 ────────────────────────────────────────────────────────
 
-    fun builtinRules(ctx: Context): List<Rule> = BuiltinData.rules(ctx).map { Rule(it.from, it.to, true) }
-
-    /** 用户自己维护的规则（含覆盖内置的规则），已按来源去重并按长度排序。 */
-    fun userRules(ctx: Context): List<Rule> {
-        val out = ArrayList<Rule>()
-        val indexes = HashMap<String, Int>()
-        for (rule in readRules(ctx)) {
-            val from = rule.from.trim()
-            val to = rule.to.trim()
-            if (from.isEmpty() || to.isEmpty()) continue
-            val key = from.lowercase()
-            val index = indexes[key]
-            if (index != null) {
-                out[index] = out[index].copy(to = to)
-            } else {
-                indexes[key] = out.size
-                out += Rule(from, to, false)
-            }
-        }
-        return out.sortedByDescending { it.from.length }
-    }
-
-    /** 合并内置与用户规则：用户覆盖同来源的内置规则，保留内置的展示写法。 */
     fun rules(ctx: Context): List<Rule> {
-        val hidden = hiddenRuleKeys(ctx)
-        val merged = LinkedHashMap<String, Rule>()
-        for (rule in builtinRules(ctx)) {
-            val key = rule.from.trim().lowercase()
-            if (key.isEmpty() || key in hidden) continue
-            merged[key] = rule
-        }
-        for (rule in userRules(ctx)) {
-            val key = rule.from.lowercase()
-            val existing = merged[key]
-            merged[key] =
-                if (existing != null) {
-                    existing.copy(to = rule.to, builtin = false)
-                } else {
-                    rule
-                }
-        }
-        return merged.values.toList()
+        ensureSeeded(ctx)
+        return mergeRules(emptyList(), readRules(ctx, KEY_GLOSSARY_RULES))
     }
 
-    /** 添加或更新一条用户规则；同名来源忽略大小写。 */
+    /** 添加或更新一条规则；同名来源忽略大小写。 */
     fun addRule(
         ctx: Context,
         from: String,
@@ -147,23 +83,20 @@ object VoiceDictionary {
         val f = from.trim()
         val t = to.trim()
         if (f.isEmpty() || t.isEmpty()) return false
+        val current = rules(ctx)
         val key = f.lowercase()
-
-        val rules = userRules(ctx).toMutableList()
-        val index = rules.indexOfFirst { it.from.lowercase() == key }
+        val index = current.indexOfFirst { it.from.lowercase() == key }
+        val next = current.toMutableList()
         if (index >= 0) {
-            rules[index] = rules[index].copy(to = t)
+            next[index] = next[index].copy(to = t)
         } else {
-            rules += Rule(f, t, false)
+            next += Rule(f, t)
         }
-        writeRules(ctx, rules)
-
-        val hidden = hiddenRuleKeys(ctx).toMutableSet()
-        if (hidden.remove(key)) writeList(ctx, KEY_HIDDEN_RULES, hidden.toList())
+        writeRules(ctx, KEY_GLOSSARY_RULES, next)
         return true
     }
 
-    /** 编辑时如果来源改了，先把旧来源删掉（内置来源会同时隐藏）。 */
+    /** 编辑时如果来源改了，先把旧来源删掉。 */
     fun updateRule(
         ctx: Context,
         originalFrom: String,
@@ -182,24 +115,176 @@ object VoiceDictionary {
     ): Boolean {
         val key = from.trim().lowercase()
         if (key.isEmpty()) return false
-
-        val user = userRules(ctx)
-        val userHadIt = user.any { it.from.lowercase() == key }
-        if (userHadIt) {
-            writeRules(ctx, user.filterNot { it.from.lowercase() == key })
-        }
-
-        val builtinHadIt = builtinRules(ctx).any { it.from.trim().lowercase() == key }
-        if (builtinHadIt) {
-            writeList(ctx, KEY_HIDDEN_RULES, (hiddenRuleKeys(ctx) + key).toList())
-        }
-        return userHadIt || builtinHadIt
+        val current = rules(ctx)
+        val next = current.filterNot { it.from.lowercase() == key }
+        if (next.size == current.size) return false
+        writeRules(ctx, KEY_GLOSSARY_RULES, next)
+        return true
     }
 
-    private fun hiddenRuleKeys(ctx: Context): Set<String> = readList(ctx, KEY_HIDDEN_RULES)
-        .map { it.trim().lowercase() }
-        .filter { it.isNotEmpty() }
-        .toSet()
+    // ── 云端 glossary.json ─────────────────────────────────────────────
+
+    /** 用云端词库整体替换本机词库。 */
+    fun replaceAll(
+        ctx: Context,
+        hotwords: List<String>,
+        rules: List<Rule>,
+    ) {
+        writeList(ctx, KEY_GLOSSARY_HOTWORDS, HotwordSanitizer.sanitize(hotwords))
+        writeRules(ctx, KEY_GLOSSARY_RULES, mergeRules(emptyList(), rules))
+        prefs(ctx).edit { putBoolean(KEY_GLOSSARY_SEEDED, true) }
+    }
+
+    /**
+     * 生成要推送的 `jackvoice-glossary-v1`。
+     * 已存在的条目沿用原 ID，新增条目生成稳定 UUID。
+     */
+    fun toCloudGlossary(
+        ctx: Context,
+        existing: JSONObject?,
+        updatedBy: String,
+    ): JSONObject {
+        val oldHotwords = HashMap<String, JSONObject>()
+        val oldReplacements = HashMap<String, JSONObject>()
+        existing?.optJSONArray("hotwords")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val item = arr.optJSONObject(i) ?: continue
+                val term = item.optString("term").trim().lowercase()
+                if (term.isNotEmpty()) oldHotwords[term] = item
+            }
+        }
+        existing?.optJSONArray("replacements")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val item = arr.optJSONObject(i) ?: continue
+                val from = item.optString("from").trim().lowercase()
+                if (from.isNotEmpty()) oldReplacements[from] = item
+            }
+        }
+
+        val hotwordArray = JSONArray()
+        hotwords(ctx).forEach { term ->
+            val old = oldHotwords[term.lowercase()]
+            hotwordArray.put(
+                JSONObject()
+                    .put("id", old?.optString("id").orEmpty().ifEmpty { newId() })
+                    .put("term", term)
+                    .put("isEnabled", old?.optBoolean("isEnabled", true) ?: true),
+            )
+        }
+
+        val replacementArray = JSONArray()
+        rules(ctx).forEach { rule ->
+            val old = oldReplacements[rule.from.lowercase()]
+            replacementArray.put(
+                JSONObject()
+                    .put("id", old?.optString("id").orEmpty().ifEmpty { newId() })
+                    .put("from", rule.from)
+                    .put("to", rule.to)
+                    .put("isEnabled", old?.optBoolean("isEnabled", true) ?: true),
+            )
+        }
+
+        return JSONObject()
+            .put("format", "jackvoice-glossary-v1")
+            .put("version", 1)
+            .put("updatedAt", nowIso())
+            .put("updatedBy", updatedBy)
+            .put("hotwords", hotwordArray)
+            .put("replacements", replacementArray)
+    }
+
+    /** @return 实际写入的热词数、替换规则数。 */
+    fun applyCloudGlossary(
+        ctx: Context,
+        glossary: JSONObject,
+    ): Pair<Int, Int> {
+        val hotwords = ArrayList<String>()
+        glossary.optJSONArray("hotwords")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val item = arr.optJSONObject(i) ?: continue
+                if (!item.optBoolean("isEnabled", true)) continue
+                val term = item.optString("term").trim()
+                if (term.isNotEmpty()) hotwords += term
+            }
+        }
+        val rules = ArrayList<Rule>()
+        glossary.optJSONArray("replacements")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val item = arr.optJSONObject(i) ?: continue
+                if (!item.optBoolean("isEnabled", true)) continue
+                val from = item.optString("from").trim()
+                val to = item.optString("to").trim()
+                if (from.isNotEmpty() && to.isNotEmpty()) rules += Rule(from, to)
+            }
+        }
+        replaceAll(ctx, hotwords, rules)
+        return hotwords.size to rules.size
+    }
+
+    private fun newId(): String = UUID.randomUUID().toString().uppercase()
+
+    private fun nowIso(): String =
+        java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US)
+            .apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }
+            .format(java.util.Date())
+
+    // ── 迁移 ────────────────────────────────────────────────────────────
+
+    @Synchronized
+    private fun ensureSeeded(ctx: Context) {
+        val prefs = prefs(ctx)
+        if (prefs.getBoolean(KEY_GLOSSARY_SEEDED, false)) return
+
+        val hiddenHotwords =
+            readList(ctx, KEY_HIDDEN_HOTWORDS)
+                .map { it.trim().lowercase() }
+                .filter { it.isNotEmpty() }
+                .toSet()
+        val oldUserHotwords = HotwordSanitizer.sanitize(readList(ctx, KEY_USER_HOTWORDS))
+        val seededHotwords =
+            HotwordSanitizer.sanitize(
+                HotwordSanitizer.sanitize(BuiltinData.hotwords(ctx))
+                    .filterNot { it.lowercase() in hiddenHotwords } + oldUserHotwords,
+            )
+
+        val hiddenRules =
+            readList(ctx, KEY_HIDDEN_RULES)
+                .map { it.trim().lowercase() }
+                .filter { it.isNotEmpty() }
+                .toSet()
+        val builtinRules =
+            BuiltinData.rules(ctx)
+                .filterNot { it.from.trim().lowercase() in hiddenRules }
+                .map { Rule(it.from, it.to) }
+        val seededRules = mergeRules(builtinRules, readRules(ctx, KEY_USER_RULES))
+
+        writeList(ctx, KEY_GLOSSARY_HOTWORDS, seededHotwords)
+        writeRules(ctx, KEY_GLOSSARY_RULES, seededRules)
+        prefs.edit { putBoolean(KEY_GLOSSARY_SEEDED, true) }
+    }
+
+    /** 同来源保留第一次出现的 from 写法，后出现的 to 覆盖先出现的 to。 */
+    private fun mergeRules(
+        primary: List<Rule>,
+        overrides: List<Rule>,
+    ): List<Rule> {
+        val out = ArrayList<Rule>()
+        val indexes = HashMap<String, Int>()
+        for (rule in primary + overrides) {
+            val from = rule.from.trim()
+            val to = rule.to.trim()
+            if (from.isEmpty() || to.isEmpty()) continue
+            val key = from.lowercase()
+            val index = indexes[key]
+            if (index != null) {
+                out[index] = out[index].copy(to = to)
+            } else {
+                indexes[key] = out.size
+                out += Rule(from, to)
+            }
+        }
+        return out
+    }
 
     // ── 存储 ────────────────────────────────────────────────────────────
 
@@ -224,19 +309,23 @@ object VoiceDictionary {
         putString(key, JSONArray(value).toString())
     }
 
-    private fun readRules(ctx: Context): List<Rule> = runCatching {
-        val raw = prefs(ctx).getString(KEY_USER_RULES, null) ?: return emptyList()
+    private fun readRules(
+        ctx: Context,
+        key: String,
+    ): List<Rule> = runCatching {
+        val raw = prefs(ctx).getString(key, null) ?: return emptyList()
         val arr = JSONArray(raw)
         (0 until arr.length()).mapNotNull {
             val o = arr.optJSONObject(it) ?: return@mapNotNull null
             val from = o.optString("from").trim()
             val to = o.optString("to").trim()
-            if (from.isEmpty() || to.isEmpty()) null else Rule(from, to, false)
+            if (from.isEmpty() || to.isEmpty()) null else Rule(from, to)
         }
     }.getOrDefault(emptyList())
 
     private fun writeRules(
         ctx: Context,
+        key: String,
         rules: List<Rule>,
     ) = prefs(ctx).edit {
         val arr = JSONArray()
@@ -247,6 +336,6 @@ object VoiceDictionary {
                     .put("to", it.to),
             )
         }
-        putString(KEY_USER_RULES, arr.toString())
+        putString(key, arr.toString())
     }
 }

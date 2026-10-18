@@ -10,6 +10,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Typeface
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.text.InputType
@@ -30,6 +31,7 @@ import androidx.core.view.updatePadding
 import androidx.lifecycle.lifecycleScope
 import com.osfans.trime.BuildConfig
 import com.osfans.trime.R
+import com.osfans.trime.ime.voice.GlossarySyncClient
 import com.osfans.trime.ime.voice.VoiceDictionary
 import com.osfans.trime.ime.voice.VoiceHistory
 import com.osfans.trime.ime.voice.VoicePrefs
@@ -67,8 +69,9 @@ class JackVoiceActivity : AppCompatActivity() {
     private lateinit var content: FrameLayout
     private lateinit var barItems: List<Pair<LinearLayout, Pair<android.widget.ImageView, TextView>>>
 
-    /** 词典页当前筛选：只看我的 / 看全部。 */
-    private var onlyMine = false
+    private enum class DictionaryTab { Hotwords, Replacements }
+
+    private var dictionaryTab = DictionaryTab.Hotwords
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -425,23 +428,138 @@ class JackVoiceActivity : AppCompatActivity() {
         }
     }
 
+    private fun tosConfig(): GlossarySyncClient.Config? {
+        val ak = VoicePrefs.tosAccessKey(this)
+        val sk = VoicePrefs.tosSecretKey(this)
+        if (ak.isBlank() || sk.isBlank()) {
+            toast("先填写 TOS AccessKey 和 SecretKey")
+            return null
+        }
+        return GlossarySyncClient.Config(
+            accessKeyId = ak,
+            secretAccessKey = sk,
+            bucket = VoicePrefs.tosBucket(this),
+            key = "glossary.json",
+            region = VoicePrefs.tosRegion(this),
+            endpoint = VoicePrefs.tosEndpoint(this),
+        )
+    }
+
+    private fun cloudCounts(glossary: org.json.JSONObject): Pair<Int, Int> {
+        val hotwords =
+            glossary.optJSONArray("hotwords")?.let { arr ->
+                (0 until arr.length()).count { i ->
+                    val item = arr.optJSONObject(i) ?: return@count false
+                    item.optBoolean("isEnabled", true) && item.optString("term").isNotBlank()
+                }
+            } ?: 0
+        val rules =
+            glossary.optJSONArray("replacements")?.let { arr ->
+                (0 until arr.length()).count { i ->
+                    val item = arr.optJSONObject(i) ?: return@count false
+                    item.optBoolean("isEnabled", true) &&
+                        item.optString("from").isNotBlank() &&
+                        item.optString("to").isNotBlank()
+                }
+            } ?: 0
+        return hotwords to rules
+    }
+
+    private fun pullGlossaryFromTos() {
+        val config = tosConfig() ?: return
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { GlossarySyncClient.pull(config) } }
+            result
+                .onSuccess { remote ->
+                    val (hotwords, rules) = cloudCounts(remote.glossary)
+                    AlertDialog
+                        .Builder(this@JackVoiceActivity)
+                        .setTitle("从 TOS 拉取词库？")
+                        .setMessage("会用云端词库覆盖本机：$hotwords 条热词、$rules 条替换词。")
+                        .setPositiveButton("覆盖") { _, _ ->
+                            val counts = VoiceDictionary.applyCloudGlossary(this@JackVoiceActivity, remote.glossary)
+                            syncHotwords()
+                            toast("已拉取 ${counts.first} 条热词、${counts.second} 条替换词")
+                            select(Tab.Settings)
+                        }.setNegativeButton(android.R.string.cancel, null)
+                        .show()
+                }.onFailure {
+                    Timber.e(it, "TOS 拉取失败")
+                    AlertDialog
+                        .Builder(this@JackVoiceActivity)
+                        .setTitle("TOS 拉取失败")
+                        .setMessage(it.message ?: it.toString())
+                        .setPositiveButton("好", null)
+                        .show()
+                }
+        }
+    }
+
+    private fun pushGlossaryToTos() {
+        val config = tosConfig() ?: return
+        val hotwords = VoiceDictionary.hotwords(this).size
+        val rules = VoiceDictionary.rules(this).size
+        AlertDialog
+            .Builder(this)
+            .setTitle("推送到 TOS？")
+            .setMessage("会用本机 $hotwords 条热词、$rules 条替换词覆盖云端 glossary.json。")
+            .setPositiveButton("推送") { _, _ ->
+                lifecycleScope.launch {
+                    val result =
+                        withContext(Dispatchers.IO) {
+                            runCatching {
+                                var remote = GlossarySyncClient.pull(config)
+                                var body =
+                                    VoiceDictionary.toCloudGlossary(
+                                        this@JackVoiceActivity,
+                                        remote.glossary,
+                                        Build.MODEL ?: "Android",
+                                    )
+                                try {
+                                    GlossarySyncClient.push(config, body, remote.etag)
+                                } catch (e: GlossarySyncClient.ConflictException) {
+                                    remote = GlossarySyncClient.pull(config)
+                                    body =
+                                        VoiceDictionary.toCloudGlossary(
+                                            this@JackVoiceActivity,
+                                            remote.glossary,
+                                            Build.MODEL ?: "Android",
+                                        )
+                                    GlossarySyncClient.push(config, body, remote.etag)
+                                }
+                            }
+                        }
+                    result
+                        .onSuccess {
+                            syncHotwords()
+                            toast("已推送到 TOS")
+                        }.onFailure {
+                            Timber.e(it, "TOS 推送失败")
+                            AlertDialog
+                                .Builder(this@JackVoiceActivity)
+                                .setTitle("TOS 推送失败")
+                                .setMessage(it.message ?: it.toString())
+                                .setPositiveButton("好", null)
+                                .show()
+                        }
+                }
+            }.setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
     // ── 词典 ────────────────────────────────────────────────────────────
 
     private fun dictionaryPage(): View {
         val col = Jv.column(this)
         col.addView(Jv.pageTitle(this, "词典"))
 
-        val userHotwords = VoiceDictionary.userHotwords(this)
-        val userRules = VoiceDictionary.userRules(this)
-        val allHotwords = VoiceDictionary.hotwords(this)
-        val allRules = VoiceDictionary.rules(this)
-        val hotwords = if (onlyMine) userHotwords else allHotwords
-        val rules = if (onlyMine) userRules else allRules
+        val hotwords = VoiceDictionary.hotwords(this)
+        val rules = VoiceDictionary.rules(this)
 
         col.addView(
             Jv.text(
                 this,
-                "热词负责听准，替换词只在终稿后本地生效。当前 ${allHotwords.size} 条热词、${allRules.size} 条替换规则。",
+                "热词负责听准，替换词只在终稿后本地生效。当前 ${hotwords.size} 条热词、${rules.size} 条替换规则。",
                 13f,
                 Jv.TEXT2,
             ).apply {
@@ -456,15 +574,15 @@ class JackVoiceActivity : AppCompatActivity() {
                 setPadding(Jv.dp(this@JackVoiceActivity, 4), Jv.dp(this@JackVoiceActivity, 4), Jv.dp(this@JackVoiceActivity, 4), Jv.dp(this@JackVoiceActivity, 4))
             }
         seg.addView(
-            segment("全部", !onlyMine) {
-                onlyMine = false
+            segment("热词 ${hotwords.size}", dictionaryTab == DictionaryTab.Hotwords) {
+                dictionaryTab = DictionaryTab.Hotwords
                 select(Tab.Dictionary)
             },
             weight(),
         )
         seg.addView(
-            segment("我的", onlyMine) {
-                onlyMine = true
+            segment("替换词 ${rules.size}", dictionaryTab == DictionaryTab.Replacements) {
+                dictionaryTab = DictionaryTab.Replacements
                 select(Tab.Dictionary)
             },
             weight(),
@@ -480,42 +598,45 @@ class JackVoiceActivity : AppCompatActivity() {
             },
         )
 
-        col.addView(Jv.sectionLabel(this, "热词 ${hotwords.size} 条"))
-        if (hotwords.isEmpty()) {
-            col.addView(dictionaryEmpty("还没有热词"))
-        } else {
-            val card = Jv.card(this)
-            val userKeys = userHotwords.map { it.lowercase() }.toSet()
-            hotwords.forEachIndexed { i, w ->
-                card.addView(hotwordRow(w, w.lowercase() in userKeys))
-                if (i != hotwords.lastIndex) card.addView(Jv.divider(this))
+        when (dictionaryTab) {
+            DictionaryTab.Hotwords -> {
+                if (hotwords.isEmpty()) {
+                    col.addView(dictionaryEmpty("还没有热词"))
+                } else {
+                    val card = Jv.card(this)
+                    hotwords.forEachIndexed { i, w ->
+                        card.addView(hotwordRow(w))
+                        if (i != hotwords.lastIndex) card.addView(Jv.divider(this))
+                    }
+                    col.addView(card)
+                }
+                col.addView(Jv.primaryButton(this, "添加热词") { addWordDialog() })
             }
-            col.addView(card)
-        }
-        col.addView(Jv.primaryButton(this, "添加热词") { addWordDialog() })
 
-        col.addView(Jv.sectionLabel(this, "替换词 ${rules.size} 条"))
-        col.addView(
-            Jv.text(
-                this,
-                "英文忽略大小写、按整词匹配；空格和拼写要一致，同一位置长规则优先。",
-                12f,
-                Jv.TEXT2,
-            ).apply {
-                setPadding(Jv.dp(this@JackVoiceActivity, 24), 0, Jv.dp(this@JackVoiceActivity, 24), Jv.dp(this@JackVoiceActivity, 8))
-            },
-        )
-        if (rules.isEmpty()) {
-            col.addView(dictionaryEmpty("还没有替换词"))
-        } else {
-            val card = Jv.card(this)
-            rules.forEachIndexed { i, rule ->
-                card.addView(ruleRow(rule))
-                if (i != rules.lastIndex) card.addView(Jv.divider(this))
+            DictionaryTab.Replacements -> {
+                col.addView(
+                    Jv.text(
+                        this,
+                        "英文忽略大小写、按整词匹配；空格和拼写要一致，同一位置长规则优先。",
+                        12f,
+                        Jv.TEXT2,
+                    ).apply {
+                        setPadding(Jv.dp(this@JackVoiceActivity, 24), 0, Jv.dp(this@JackVoiceActivity, 24), Jv.dp(this@JackVoiceActivity, 8))
+                    },
+                )
+                if (rules.isEmpty()) {
+                    col.addView(dictionaryEmpty("还没有替换词"))
+                } else {
+                    val card = Jv.card(this)
+                    rules.forEachIndexed { i, rule ->
+                        card.addView(ruleRow(rule))
+                        if (i != rules.lastIndex) card.addView(Jv.divider(this))
+                    }
+                    col.addView(card)
+                }
+                col.addView(Jv.primaryButton(this, "添加替换词") { editRuleDialog(null) })
             }
-            col.addView(card)
         }
-        col.addView(Jv.primaryButton(this, "添加替换词") { editRuleDialog(null) })
         return Jv.page(col)
     }
 
@@ -540,10 +661,7 @@ class JackVoiceActivity : AppCompatActivity() {
         setOnClickListener { onClick() }
     }
 
-    private fun hotwordRow(
-        word: String,
-        userAdded: Boolean,
-    ): View {
+    private fun hotwordRow(word: String): View {
         val box =
             LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -556,7 +674,7 @@ class JackVoiceActivity : AppCompatActivity() {
             }
         column.addView(Jv.text(this, word, 16f))
         column.addView(
-            Jv.text(this, if (userAdded) "手动添加" else "内置", 12f, Jv.TEXT2).apply {
+            Jv.text(this, "听准时优先识别", 12f, Jv.TEXT2).apply {
                 setPadding(0, Jv.dp(this@JackVoiceActivity, 5), 0, 0)
             },
         )
@@ -578,31 +696,23 @@ class JackVoiceActivity : AppCompatActivity() {
             }
         column.addView(Jv.text(this, "${rule.from}  →  ${rule.to}", 15f))
         column.addView(
-            Jv.text(this, if (rule.builtin) "内置替换" else "手动替换", 12f, Jv.TEXT2).apply {
+            Jv.text(this, "终稿后本地替换", 12f, Jv.TEXT2).apply {
                 setPadding(0, Jv.dp(this@JackVoiceActivity, 5), 0, 0)
             },
         )
         box.addView(column, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        box.addView(iconText(if (rule.builtin) "覆盖" else "编辑") { editRuleDialog(rule) })
+        box.addView(iconText("编辑") { editRuleDialog(rule) })
         box.addView(iconText("删除", Jv.DANGER) { confirmRemoveRule(rule) })
         return box
     }
 
     private fun confirmRemoveHotword(word: String) {
-        val builtin = VoiceDictionary.builtinHotwords(this).any { it.equals(word, ignoreCase = true) }
-        val mine = VoiceDictionary.userHotwords(this).any { it.equals(word, ignoreCase = true) }
-        val message =
-            when {
-                builtin && mine -> "「$word」会被隐藏，并从你的词库里移除。"
-                builtin -> "「$word」会从内置词库中隐藏，之后仍可手动加回来。"
-                else -> "「$word」会从你的词库中删除。"
-            }
         val syncNote =
             if (VoicePrefs.boostingTableId(this).isNotBlank()) "云端热词表会一起更新。" else ""
         AlertDialog
             .Builder(this)
             .setTitle("删除热词？")
-            .setMessage(message + syncNote)
+            .setMessage("「$word」会从词库中删除，之后可以重新添加。$syncNote")
             .setPositiveButton("删除") { _, _ ->
                 VoiceDictionary.removeHotword(this, word)
                 syncHotwords()
@@ -612,17 +722,10 @@ class JackVoiceActivity : AppCompatActivity() {
     }
 
     private fun confirmRemoveRule(rule: VoiceDictionary.Rule) {
-        val builtin = VoiceDictionary.builtinRules(this).any { it.from.equals(rule.from, ignoreCase = true) }
-        val message =
-            if (builtin) {
-                "「${rule.from} → ${rule.to}」会从词库中移除，同来源的内置规则也不会再出现。"
-            } else {
-                "「${rule.from} → ${rule.to}」会从你的词库里删除。"
-            }
         AlertDialog
             .Builder(this)
             .setTitle("删除替换词？")
-            .setMessage(message)
+            .setMessage("「${rule.from} → ${rule.to}」会从词库中删除。")
             .setPositiveButton("删除") { _, _ ->
                 VoiceDictionary.removeRule(this, rule.from)
                 select(Tab.Dictionary)
@@ -741,6 +844,48 @@ class JackVoiceActivity : AppCompatActivity() {
     private fun settingsPage(): View {
         val col = Jv.column(this)
         col.addView(Jv.pageTitle(this, "设置"))
+
+        col.addView(Jv.sectionLabel(this, "词库云同步"))
+        val cloud = Jv.card(this)
+        val tosAk = VoicePrefs.tosAccessKey(this)
+        cloud.addView(
+            Jv.row(
+                this,
+                "TOS AccessKey",
+                if (tosAk.isBlank()) "未填写" else maskKey(tosAk),
+                chevron = true,
+            ) { editTosAccessKeyDialog() },
+        )
+        cloud.addView(Jv.divider(this))
+        cloud.addView(
+            Jv.row(
+                this,
+                "TOS SecretKey",
+                if (VoicePrefs.tosSecretKey(this).isBlank()) "未填写" else "已填写",
+                chevron = true,
+            ) { editTosSecretKeyDialog() },
+        )
+        cloud.addView(Jv.divider(this))
+        cloud.addView(
+            Jv.row(
+                this,
+                "从 TOS 拉取词库",
+                "用云端 glossary.json 覆盖本机",
+                trailing = "拉取",
+                chevron = true,
+            ) { pullGlossaryFromTos() },
+        )
+        cloud.addView(Jv.divider(this))
+        cloud.addView(
+            Jv.row(
+                this,
+                "推送到 TOS",
+                "用本机词库覆盖云端 glossary.json",
+                trailing = "推送",
+                chevron = true,
+            ) { pushGlossaryToTos() },
+        )
+        col.addView(cloud)
 
         col.addView(Jv.sectionLabel(this, "语音识别"))
         val voice = Jv.card(this)
@@ -877,6 +1022,48 @@ class JackVoiceActivity : AppCompatActivity() {
             .setView(input)
             .setPositiveButton("保存") { _, _ ->
                 VoicePrefs.setBoostingTableId(this, input.text.toString())
+                select(Tab.Settings)
+            }.setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun editTosAccessKeyDialog() {
+        val input =
+            EditText(this).apply {
+                inputType = InputType.TYPE_CLASS_TEXT
+                setText(VoicePrefs.tosAccessKey(this@JackVoiceActivity))
+                hint = "IAM 用户 jackvoice-sync 的 AccessKey ID"
+                setSingleLine()
+                typeface = Typeface.MONOSPACE
+            }
+        AlertDialog
+            .Builder(this)
+            .setTitle("TOS AccessKey")
+            .setMessage("只用于读写 jackvoice-glossary 桶里的 glossary.json。")
+            .setView(input)
+            .setPositiveButton("保存") { _, _ ->
+                VoicePrefs.setTosAccessKey(this, input.text.toString())
+                select(Tab.Settings)
+            }.setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun editTosSecretKeyDialog() {
+        val input =
+            EditText(this).apply {
+                inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+                setText(VoicePrefs.tosSecretKey(this@JackVoiceActivity))
+                hint = "AccessKey Secret"
+                setSingleLine()
+                typeface = Typeface.MONOSPACE
+            }
+        AlertDialog
+            .Builder(this)
+            .setTitle("TOS SecretKey")
+            .setMessage("只保存在本机应用私有存储里。")
+            .setView(input)
+            .setPositiveButton("保存") { _, _ ->
+                VoicePrefs.setTosSecretKey(this, input.text.toString())
                 select(Tab.Settings)
             }.setNegativeButton(android.R.string.cancel, null)
             .show()

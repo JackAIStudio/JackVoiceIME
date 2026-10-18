@@ -22,6 +22,11 @@ object VoicePrefs {
     const val KEY_BOOSTING_TABLE_ID = "voice_boosting_table_id"
     const val KEY_HOTWORDS_ENABLED = "voice_hotwords_enabled"
     const val KEY_LAST_TAB = "voice_last_tab"
+    const val KEY_TOS_ACCESS_KEY = "voice_tos_access_key"
+    const val KEY_TOS_SECRET_KEY = "voice_tos_secret_key"
+    const val KEY_TOS_BUCKET = "voice_tos_bucket"
+    const val KEY_TOS_REGION = "voice_tos_region"
+    const val KEY_TOS_ENDPOINT = "voice_tos_endpoint"
 
     fun apiKey(ctx: Context): String = prefs(ctx).getString(KEY_API_KEY, "").orEmpty().trim()
 
@@ -50,6 +55,36 @@ object VoicePrefs {
         ctx: Context,
         value: String,
     ) = prefs(ctx).edit { putString(KEY_BOOSTING_TABLE_ID, value.trim()) }
+
+    fun tosAccessKey(ctx: Context): String =
+        prefs(ctx).getString(KEY_TOS_ACCESS_KEY, "").orEmpty().trim()
+
+    fun tosSecretKey(ctx: Context): String =
+        prefs(ctx).getString(KEY_TOS_SECRET_KEY, "").orEmpty().trim()
+
+    fun tosBucket(ctx: Context): String =
+        prefs(ctx).getString(KEY_TOS_BUCKET, "jackvoice-glossary").orEmpty().trim()
+
+    fun tosRegion(ctx: Context): String =
+        prefs(ctx).getString(KEY_TOS_REGION, "cn-beijing").orEmpty().trim()
+
+    fun tosEndpoint(ctx: Context): String =
+        prefs(ctx).getString(KEY_TOS_ENDPOINT, "tos-cn-beijing.volces.com").orEmpty().trim()
+
+    fun setTosAccessKey(
+        ctx: Context,
+        value: String,
+    ) = prefs(ctx).edit { putString(KEY_TOS_ACCESS_KEY, value.trim()) }
+
+    fun setTosSecretKey(
+        ctx: Context,
+        value: String,
+    ) = prefs(ctx).edit { putString(KEY_TOS_SECRET_KEY, value.trim()) }
+
+    fun setTosBucket(
+        ctx: Context,
+        value: String,
+    ) = prefs(ctx).edit { putString(KEY_TOS_BUCKET, value.trim()) }
 
     /**
      * 用户上一次停在哪个模块（语音 / 拼音 / EN）。
