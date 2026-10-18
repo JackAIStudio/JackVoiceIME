@@ -10,7 +10,6 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.graphics.Typeface
-import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.text.InputType
@@ -32,11 +31,12 @@ import androidx.lifecycle.lifecycleScope
 import com.osfans.trime.BuildConfig
 import com.osfans.trime.R
 import com.osfans.trime.ime.voice.GlossarySyncClient
+import com.osfans.trime.ime.voice.GlossarySyncManager
+import com.osfans.trime.ime.voice.HotwordTableSync
 import com.osfans.trime.ime.voice.VoiceDictionary
 import com.osfans.trime.ime.voice.VoiceHistory
 import com.osfans.trime.ime.voice.VoicePrefs
 import com.osfans.trime.ime.voice.VoiceStats
-import com.osfans.trime.ime.voice.VolcHotwordApi
 import com.osfans.trime.ui.main.MainActivity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -55,7 +55,7 @@ import java.util.Locale
  *
  * Trime 自己的 Rime 设置保留在「设置 → 输入法高级设置」里，没有被替换掉。
  */
-class JackVoiceActivity : AppCompatActivity() {
+class JackVoiceActivity : AppCompatActivity(), GlossarySyncManager.Listener {
     private enum class Tab(
         val label: String,
         val icon: Int,
@@ -72,6 +72,7 @@ class JackVoiceActivity : AppCompatActivity() {
     private enum class DictionaryTab { Hotwords, Replacements }
 
     private var dictionaryTab = DictionaryTab.Hotwords
+    private var currentTab = Tab.Home
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -107,7 +108,24 @@ class JackVoiceActivity : AppCompatActivity() {
         }
 
         setContentView(root)
+        GlossarySyncManager.addListener(this)
         select(Tab.Home)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        GlossarySyncManager.onForeground(this)
+    }
+
+    override fun onDestroy() {
+        GlossarySyncManager.removeListener(this)
+        super.onDestroy()
+    }
+
+    override fun onGlossarySync(report: GlossarySyncManager.Report) {
+        if (currentTab == Tab.Dictionary || currentTab == Tab.Settings) {
+            select(currentTab)
+        }
     }
 
     // ── 底部导航 ────────────────────────────────────────────────────────
@@ -147,6 +165,7 @@ class JackVoiceActivity : AppCompatActivity() {
     }
 
     private fun select(tab: Tab) {
+        currentTab = tab
         Tab.entries.forEachIndexed { i, t ->
             val (icon, label) = barItems[i].second
             val on = t == tab
@@ -396,31 +415,18 @@ class JackVoiceActivity : AppCompatActivity() {
      * 自动同步失败不拦本地修改，只提示一次。
      */
     private fun syncHotwords(manual: Boolean = false) {
-        val tableId = VoicePrefs.boostingTableId(this)
-        val apiKey = VoicePrefs.apiKey(this)
-        if (tableId.isBlank()) {
-            if (manual) toast("先填写云端热词表 ID")
-            return
-        }
-        if (apiKey.isBlank()) {
-            if (manual) toast("先填写火山 API Key")
-            return
-        }
-        val words = VoiceDictionary.hotwords(this)
-        if (words.isEmpty()) {
-            if (manual) toast("没有可同步的热词")
-            return
-        }
-        if (manual) toast("正在同步 ${words.size} 条热词…")
+        if (manual) toast("正在同步热词表…")
         lifecycleScope.launch {
-            val result =
-                withContext(Dispatchers.IO) {
-                    VolcHotwordApi.updateBoostingTable(apiKey, tableId, words)
-                }
+            val result = HotwordTableSync.sync(this@JackVoiceActivity)
             result
-                .onSuccess {
-                    Timber.i("热词表同步成功：${words.size} 条")
-                    if (manual) toast("已同步 ${words.size} 条热词到云端")
+                .onSuccess { outcome ->
+                    when (outcome) {
+                        is HotwordTableSync.Outcome.Synced -> {
+                            Timber.i("热词表同步成功：${outcome.count} 条")
+                            if (manual) toast("已同步 ${outcome.count} 条热词到云端")
+                        }
+                        is HotwordTableSync.Outcome.Skipped -> if (manual) toast(outcome.reason)
+                    }
                 }.onFailure {
                     Timber.e(it, "热词表同步失败")
                     toast("热词已保存在本地；云端同步失败：${it.message ?: "未知错误"}")
@@ -477,26 +483,26 @@ class JackVoiceActivity : AppCompatActivity() {
                         .setTitle("从 TOS 拉取词库？")
                         .setMessage("会用云端词库覆盖本机：$hotwords 条热词、$rules 条替换词。")
                         .setPositiveButton("覆盖") { _, _ ->
-                            val counts = VoiceDictionary.applyCloudGlossary(this@JackVoiceActivity, remote.glossary)
-                            syncHotwords()
-                            toast("已拉取 ${counts.first} 条热词、${counts.second} 条替换词")
-                            select(Tab.Settings)
+                            lifecycleScope.launch {
+                                val report = GlossarySyncManager.forcePull(this@JackVoiceActivity)
+                                if (report.error != null) {
+                                    showSyncError("TOS 拉取失败", report.error)
+                                } else {
+                                    toast("已拉取 ${report.hotwordCount} 条热词、${report.replacementCount} 条替换词")
+                                    select(Tab.Settings)
+                                }
+                            }
                         }.setNegativeButton(android.R.string.cancel, null)
                         .show()
                 }.onFailure {
                     Timber.e(it, "TOS 拉取失败")
-                    AlertDialog
-                        .Builder(this@JackVoiceActivity)
-                        .setTitle("TOS 拉取失败")
-                        .setMessage(it.message ?: it.toString())
-                        .setPositiveButton("好", null)
-                        .show()
+                    showSyncError("TOS 拉取失败", it.message ?: it.toString())
                 }
         }
     }
 
     private fun pushGlossaryToTos() {
-        val config = tosConfig() ?: return
+        tosConfig() ?: return
         val hotwords = VoiceDictionary.hotwords(this).size
         val rules = VoiceDictionary.rules(this).size
         AlertDialog
@@ -505,45 +511,43 @@ class JackVoiceActivity : AppCompatActivity() {
             .setMessage("会用本机 $hotwords 条热词、$rules 条替换词覆盖云端 glossary.json。")
             .setPositiveButton("推送") { _, _ ->
                 lifecycleScope.launch {
-                    val result =
-                        withContext(Dispatchers.IO) {
-                            runCatching {
-                                var remote = GlossarySyncClient.pull(config)
-                                var body =
-                                    VoiceDictionary.toCloudGlossary(
-                                        this@JackVoiceActivity,
-                                        remote.glossary,
-                                        Build.MODEL ?: "Android",
-                                    )
-                                try {
-                                    GlossarySyncClient.push(config, body, remote.etag)
-                                } catch (e: GlossarySyncClient.ConflictException) {
-                                    remote = GlossarySyncClient.pull(config)
-                                    body =
-                                        VoiceDictionary.toCloudGlossary(
-                                            this@JackVoiceActivity,
-                                            remote.glossary,
-                                            Build.MODEL ?: "Android",
-                                        )
-                                    GlossarySyncClient.push(config, body, remote.etag)
-                                }
-                            }
-                        }
-                    result
-                        .onSuccess {
-                            syncHotwords()
-                            toast("已推送到 TOS")
-                        }.onFailure {
-                            Timber.e(it, "TOS 推送失败")
-                            AlertDialog
-                                .Builder(this@JackVoiceActivity)
-                                .setTitle("TOS 推送失败")
-                                .setMessage(it.message ?: it.toString())
-                                .setPositiveButton("好", null)
-                                .show()
-                        }
+                    val report = GlossarySyncManager.forcePush(this@JackVoiceActivity)
+                    if (report.error != null) {
+                        showSyncError("TOS 推送失败", report.error)
+                    } else {
+                        toast("已推送 ${report.hotwordCount} 条热词、${report.replacementCount} 条替换词")
+                        select(Tab.Settings)
+                    }
                 }
             }.setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun syncGlossaryNow() {
+        lifecycleScope.launch {
+            toast("正在同步词库…")
+            val report = GlossarySyncManager.sync(this@JackVoiceActivity, manual = true)
+            if (report.error != null) {
+                showSyncError("词库同步失败", report.error)
+            } else if (report.skipped) {
+                toast("先填写 TOS AccessKey 和 SecretKey")
+            } else {
+                val conflictNote = if (report.conflicts > 0) "，合并了 ${report.conflicts} 条冲突" else ""
+                toast("已同步 ${report.hotwordCount} 条热词、${report.replacementCount} 条替换词$conflictNote")
+                select(currentTab)
+            }
+        }
+    }
+
+    private fun showSyncError(
+        title: String,
+        message: String,
+    ) {
+        AlertDialog
+            .Builder(this)
+            .setTitle(title)
+            .setMessage(message)
+            .setPositiveButton("好", null)
             .show()
     }
 
@@ -564,6 +568,17 @@ class JackVoiceActivity : AppCompatActivity() {
                 Jv.TEXT2,
             ).apply {
                 setPadding(Jv.dp(this@JackVoiceActivity, 20), 0, Jv.dp(this@JackVoiceActivity, 20), Jv.dp(this@JackVoiceActivity, 12))
+            },
+        )
+
+        col.addView(
+            Jv.text(
+                this,
+                "云同步：${GlossarySyncManager.summary(this)}",
+                12f,
+                Jv.TEXT2,
+            ).apply {
+                setPadding(Jv.dp(this@JackVoiceActivity, 20), 0, Jv.dp(this@JackVoiceActivity, 20), Jv.dp(this@JackVoiceActivity, 10))
             },
         )
 
@@ -707,8 +722,15 @@ class JackVoiceActivity : AppCompatActivity() {
     }
 
     private fun confirmRemoveHotword(word: String) {
+        val lastOne = VoiceDictionary.hotwords(this).size <= 1
+        val hasTable = VoicePrefs.boostingTableId(this).isNotBlank()
         val syncNote =
-            if (VoicePrefs.boostingTableId(this).isNotBlank()) "云端热词表会一起更新。" else ""
+            when {
+                lastOne && hasTable ->
+                    "这是最后一条热词；火山热词表不接受空文件，云端旧表不会被清空。手机和 Mac 的词库会自动同步。"
+                hasTable -> "火山识别热词表会一起更新，手机和 Mac 的词库会自动同步。"
+                else -> "手机和 Mac 的词库会自动同步。"
+            }
         AlertDialog
             .Builder(this)
             .setTitle("删除热词？")
@@ -716,6 +738,7 @@ class JackVoiceActivity : AppCompatActivity() {
             .setPositiveButton("删除") { _, _ ->
                 VoiceDictionary.removeHotword(this, word)
                 syncHotwords()
+                GlossarySyncManager.onLocalChange(this)
                 select(Tab.Dictionary)
             }.setNegativeButton(android.R.string.cancel, null)
             .show()
@@ -728,6 +751,7 @@ class JackVoiceActivity : AppCompatActivity() {
             .setMessage("「${rule.from} → ${rule.to}」会从词库中删除。")
             .setPositiveButton("删除") { _, _ ->
                 VoiceDictionary.removeRule(this, rule.from)
+                GlossarySyncManager.onLocalChange(this)
                 select(Tab.Dictionary)
             }.setNegativeButton(android.R.string.cancel, null)
             .show()
@@ -757,6 +781,7 @@ class JackVoiceActivity : AppCompatActivity() {
                 if (VoiceDictionary.addHotword(this, input.text.toString())) {
                     dialog.dismiss()
                     syncHotwords()
+                    GlossarySyncManager.onLocalChange(this)
                     select(Tab.Dictionary)
                 } else {
                     input.error = "只能包含文字和数字，最长 32 个字符"
@@ -832,6 +857,7 @@ class JackVoiceActivity : AppCompatActivity() {
                     }
                 if (ok) {
                     dialog.dismiss()
+                    GlossarySyncManager.onLocalChange(this)
                     select(Tab.Dictionary)
                 }
             }
@@ -847,6 +873,29 @@ class JackVoiceActivity : AppCompatActivity() {
 
         col.addView(Jv.sectionLabel(this, "词库云同步"))
         val cloud = Jv.card(this)
+        val autoSync = VoicePrefs.glossaryAutoSync(this)
+        cloud.addView(
+            Jv.row(
+                this,
+                "词库同步",
+                GlossarySyncManager.summary(this),
+                trailing = if (autoSync) "自动" else "手动",
+                chevron = true,
+            ) { syncGlossaryNow() },
+        )
+        cloud.addView(Jv.divider(this))
+        cloud.addView(
+            Jv.row(
+                this,
+                "自动同步",
+                "本机改动后自动推送；主界面和语音面板打开时自动拉取",
+                trailing = if (autoSync) "开" else "关",
+            ) {
+                VoicePrefs.setGlossaryAutoSync(this, !autoSync)
+                select(Tab.Settings)
+            },
+        )
+        cloud.addView(Jv.divider(this))
         val tosAk = VoicePrefs.tosAccessKey(this)
         cloud.addView(
             Jv.row(
@@ -916,7 +965,7 @@ class JackVoiceActivity : AppCompatActivity() {
         voice.addView(
             Jv.row(
                 this,
-                "云端热词表",
+                "识别热词表（火山）",
                 if (boostingTableId.isBlank()) {
                     "未设置：本地热词按 100 字符预算直传"
                 } else {
@@ -930,7 +979,7 @@ class JackVoiceActivity : AppCompatActivity() {
         voice.addView(
             Jv.row(
                 this,
-                "同步热词表",
+                "同步识别热词表",
                 "把当前 ${VoiceDictionary.hotwords(this).size} 条热词整体覆盖到云端",
                 trailing = "同步",
                 chevron = true,
@@ -941,7 +990,7 @@ class JackVoiceActivity : AppCompatActivity() {
             Jv.row(
                 this,
                 "替换词",
-                "只在本机终稿后执行，不上传云端",
+                "终稿后本地执行；通过 TOS 在手机和 Mac 间同步",
                 trailing = "${VoiceDictionary.rules(this).size} 条",
                 chevron = true,
             ) { select(Tab.Dictionary) },

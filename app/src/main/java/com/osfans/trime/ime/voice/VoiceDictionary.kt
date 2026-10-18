@@ -19,6 +19,8 @@ import java.util.UUID
  * 保证已经删过或加过的词不会因为这次升级丢状态。
  */
 object VoiceDictionary {
+    const val CLOUD_FORMAT = "jackvoice-glossary-v1"
+
     private const val KEY_GLOSSARY_HOTWORDS = "voice_glossary_hotwords_v1"
     private const val KEY_GLOSSARY_RULES = "voice_glossary_rules_v1"
     private const val KEY_GLOSSARY_SEEDED = "voice_glossary_seeded_v1"
@@ -32,6 +34,11 @@ object VoiceDictionary {
     data class Rule(
         val from: String,
         val to: String,
+    )
+
+    data class Snapshot(
+        val hotwords: List<String>,
+        val rules: List<Rule>,
     )
 
     // ── 热词 ────────────────────────────────────────────────────────────
@@ -51,6 +58,7 @@ object VoiceDictionary {
         val current = hotwords(ctx)
         if (current.any { it.equals(cleaned, ignoreCase = true) }) return true
         writeList(ctx, KEY_GLOSSARY_HOTWORDS, current + cleaned)
+        VoicePrefs.markGlossaryLocalChange(ctx)
         return true
     }
 
@@ -64,6 +72,7 @@ object VoiceDictionary {
         val next = current.filterNot { it.lowercase() == key }
         if (next.size == current.size) return false
         writeList(ctx, KEY_GLOSSARY_HOTWORDS, next)
+        VoicePrefs.markGlossaryLocalChange(ctx)
         return true
     }
 
@@ -93,6 +102,7 @@ object VoiceDictionary {
             next += Rule(f, t)
         }
         writeRules(ctx, KEY_GLOSSARY_RULES, next)
+        VoicePrefs.markGlossaryLocalChange(ctx)
         return true
     }
 
@@ -119,6 +129,7 @@ object VoiceDictionary {
         val next = current.filterNot { it.from.lowercase() == key }
         if (next.size == current.size) return false
         writeRules(ctx, KEY_GLOSSARY_RULES, next)
+        VoicePrefs.markGlossaryLocalChange(ctx)
         return true
     }
 
@@ -135,6 +146,8 @@ object VoiceDictionary {
         prefs(ctx).edit { putBoolean(KEY_GLOSSARY_SEEDED, true) }
     }
 
+    fun localSnapshot(ctx: Context): Snapshot = Snapshot(hotwords(ctx), rules(ctx))
+
     /**
      * 生成要推送的 `jackvoice-glossary-v1`。
      * 已存在的条目沿用原 ID，新增条目生成稳定 UUID。
@@ -143,13 +156,20 @@ object VoiceDictionary {
         ctx: Context,
         existing: JSONObject?,
         updatedBy: String,
+    ): JSONObject = toCloudGlossary(hotwords(ctx), rules(ctx), existing, updatedBy)
+
+    fun toCloudGlossary(
+        hotwords: List<String>,
+        rules: List<Rule>,
+        existing: JSONObject?,
+        updatedBy: String,
     ): JSONObject {
         val oldHotwords = HashMap<String, JSONObject>()
         val oldReplacements = HashMap<String, JSONObject>()
         existing?.optJSONArray("hotwords")?.let { arr ->
             for (i in 0 until arr.length()) {
                 val item = arr.optJSONObject(i) ?: continue
-                val term = item.optString("term").trim().lowercase()
+                val term = HotwordSanitizer.normalize(item.optString("term")).lowercase()
                 if (term.isNotEmpty()) oldHotwords[term] = item
             }
         }
@@ -161,31 +181,56 @@ object VoiceDictionary {
             }
         }
 
+        val normalizedHotwords = HotwordSanitizer.sanitize(hotwords)
+        val seenHotwords = normalizedHotwords.map { it.lowercase() }.toHashSet()
         val hotwordArray = JSONArray()
-        hotwords(ctx).forEach { term ->
+        normalizedHotwords.forEach { term ->
             val old = oldHotwords[term.lowercase()]
             hotwordArray.put(
                 JSONObject()
                     .put("id", old?.optString("id").orEmpty().ifEmpty { newId() })
                     .put("term", term)
-                    .put("isEnabled", old?.optBoolean("isEnabled", true) ?: true),
+                    .put("isEnabled", true),
             )
         }
 
+        val mergedRules = mergeRules(emptyList(), rules)
+        val seenRules = mergedRules.map { it.from.trim().lowercase() }.toHashSet()
         val replacementArray = JSONArray()
-        rules(ctx).forEach { rule ->
+        mergedRules.forEach { rule ->
             val old = oldReplacements[rule.from.lowercase()]
             replacementArray.put(
                 JSONObject()
                     .put("id", old?.optString("id").orEmpty().ifEmpty { newId() })
                     .put("from", rule.from)
                     .put("to", rule.to)
-                    .put("isEnabled", old?.optBoolean("isEnabled", true) ?: true),
+                    .put("isEnabled", true),
             )
         }
 
+        // 当前 UI 没有“停用”开关，但云端已有的停用项不能因为一次推送就消失。
+        existing?.optJSONArray("hotwords")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val item = arr.optJSONObject(i) ?: continue
+                if (item.optBoolean("isEnabled", true)) continue
+                val term = HotwordSanitizer.normalize(item.optString("term"))
+                if (term.isEmpty() || term.lowercase() in seenHotwords) continue
+                hotwordArray.put(item)
+            }
+        }
+
+        existing?.optJSONArray("replacements")?.let { arr ->
+            for (i in 0 until arr.length()) {
+                val item = arr.optJSONObject(i) ?: continue
+                if (item.optBoolean("isEnabled", true)) continue
+                val from = item.optString("from").trim().lowercase()
+                if (from.isEmpty() || from in seenRules) continue
+                replacementArray.put(item)
+            }
+        }
+
         return JSONObject()
-            .put("format", "jackvoice-glossary-v1")
+            .put("format", CLOUD_FORMAT)
             .put("version", 1)
             .put("updatedAt", nowIso())
             .put("updatedBy", updatedBy)
@@ -198,27 +243,34 @@ object VoiceDictionary {
         ctx: Context,
         glossary: JSONObject,
     ): Pair<Int, Int> {
-        val hotwords = ArrayList<String>()
+        val snapshot = cloudSnapshot(glossary) ?: error("云端词库格式不是 $CLOUD_FORMAT")
+        replaceAll(ctx, snapshot.hotwords, snapshot.rules)
+        return snapshot.hotwords.size to snapshot.rules.size
+    }
+
+    /** 云端 JSON → 本机可用的词库；格式不对时返回 null，绝不拿空数组去覆盖本地。 */
+    fun cloudSnapshot(glossary: JSONObject): Snapshot? {
+        if (glossary.optString("format") != CLOUD_FORMAT) return null
+        val parsedHotwords = ArrayList<String>()
         glossary.optJSONArray("hotwords")?.let { arr ->
             for (i in 0 until arr.length()) {
                 val item = arr.optJSONObject(i) ?: continue
                 if (!item.optBoolean("isEnabled", true)) continue
                 val term = item.optString("term").trim()
-                if (term.isNotEmpty()) hotwords += term
+                if (term.isNotEmpty()) parsedHotwords += term
             }
         }
-        val rules = ArrayList<Rule>()
+        val parsedRules = ArrayList<Rule>()
         glossary.optJSONArray("replacements")?.let { arr ->
             for (i in 0 until arr.length()) {
                 val item = arr.optJSONObject(i) ?: continue
                 if (!item.optBoolean("isEnabled", true)) continue
                 val from = item.optString("from").trim()
                 val to = item.optString("to").trim()
-                if (from.isNotEmpty() && to.isNotEmpty()) rules += Rule(from, to)
+                if (from.isNotEmpty() && to.isNotEmpty()) parsedRules += Rule(from, to)
             }
         }
-        replaceAll(ctx, hotwords, rules)
-        return hotwords.size to rules.size
+        return Snapshot(HotwordSanitizer.sanitize(parsedHotwords), mergeRules(emptyList(), parsedRules))
     }
 
     private fun newId(): String = UUID.randomUUID().toString().uppercase()

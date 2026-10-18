@@ -77,6 +77,8 @@ class VoiceWindow(di: DI) :
         panel?.toolbar?.setActive(VoiceTab.Voice)
         // 记住用户停在这一屏：下次展开键盘先回到语音面板（默认也是它）。
         VoicePrefs.setLastTab(context, VoiceTab.Voice)
+        // 另一端可能刚改过词库：面板展开时做一次节流检查，下一轮听写就能用上。
+        GlossarySyncManager.onVoicePanelShown(context)
         // 用户明确回到面板：上一轮残留的识别结果该落就落，别一直排着。
         VoiceSession.flushPending(force = true)
     }

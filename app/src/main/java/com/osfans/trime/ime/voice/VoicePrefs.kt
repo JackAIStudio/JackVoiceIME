@@ -27,6 +27,13 @@ object VoicePrefs {
     const val KEY_TOS_BUCKET = "voice_tos_bucket"
     const val KEY_TOS_REGION = "voice_tos_region"
     const val KEY_TOS_ENDPOINT = "voice_tos_endpoint"
+    const val KEY_GLOSSARY_BASE = "voice_glossary_base_v1"
+    const val KEY_GLOSSARY_LAST_SYNCED_AT = "voice_glossary_last_synced_at"
+    const val KEY_GLOSSARY_LAST_ERROR = "voice_glossary_last_error"
+    const val KEY_GLOSSARY_LOCAL_CHANGED_AT = "voice_glossary_local_changed_at"
+    const val KEY_GLOSSARY_LOCAL_REVISION = "voice_glossary_local_revision"
+    const val KEY_GLOSSARY_LAST_CONFLICTS = "voice_glossary_last_conflicts"
+    const val KEY_GLOSSARY_AUTO_SYNC = "voice_glossary_auto_sync"
 
     fun apiKey(ctx: Context): String = prefs(ctx).getString(KEY_API_KEY, "").orEmpty().trim()
 
@@ -56,11 +63,15 @@ object VoicePrefs {
         value: String,
     ) = prefs(ctx).edit { putString(KEY_BOOSTING_TABLE_ID, value.trim()) }
 
-    fun tosAccessKey(ctx: Context): String =
-        prefs(ctx).getString(KEY_TOS_ACCESS_KEY, "").orEmpty().trim()
+    fun tosAccessKey(ctx: Context): String {
+        migrateLegacyTosCredentials(ctx)
+        return TosCredentialStore.load(ctx)?.accessKeyId.orEmpty()
+    }
 
-    fun tosSecretKey(ctx: Context): String =
-        prefs(ctx).getString(KEY_TOS_SECRET_KEY, "").orEmpty().trim()
+    fun tosSecretKey(ctx: Context): String {
+        migrateLegacyTosCredentials(ctx)
+        return TosCredentialStore.load(ctx)?.secretAccessKey.orEmpty()
+    }
 
     fun tosBucket(ctx: Context): String =
         prefs(ctx).getString(KEY_TOS_BUCKET, "jackvoice-glossary").orEmpty().trim()
@@ -74,12 +85,75 @@ object VoicePrefs {
     fun setTosAccessKey(
         ctx: Context,
         value: String,
-    ) = prefs(ctx).edit { putString(KEY_TOS_ACCESS_KEY, value.trim()) }
+    ) = TosCredentialStore.setAccessKey(ctx, value)
 
     fun setTosSecretKey(
         ctx: Context,
         value: String,
-    ) = prefs(ctx).edit { putString(KEY_TOS_SECRET_KEY, value.trim()) }
+    ) = TosCredentialStore.setSecretKey(ctx, value)
+
+    fun glossaryBase(ctx: Context): String? =
+        prefs(ctx).getString(KEY_GLOSSARY_BASE, null)?.takeIf { it.isNotBlank() }
+
+    fun setGlossaryBase(
+        ctx: Context,
+        value: String?,
+    ) = prefs(ctx).edit {
+        if (value.isNullOrBlank()) remove(KEY_GLOSSARY_BASE) else putString(KEY_GLOSSARY_BASE, value)
+    }
+
+    fun glossaryLastSyncedAt(ctx: Context): Long =
+        prefs(ctx).getLong(KEY_GLOSSARY_LAST_SYNCED_AT, 0L)
+
+    fun setGlossaryLastSyncedAt(
+        ctx: Context,
+        value: Long,
+    ) = prefs(ctx).edit { putLong(KEY_GLOSSARY_LAST_SYNCED_AT, value) }
+
+    fun glossaryLastError(ctx: Context): String? =
+        prefs(ctx).getString(KEY_GLOSSARY_LAST_ERROR, null)?.takeIf { it.isNotBlank() }
+
+    fun setGlossaryLastError(
+        ctx: Context,
+        value: String?,
+    ) = prefs(ctx).edit {
+        if (value.isNullOrBlank()) remove(KEY_GLOSSARY_LAST_ERROR) else putString(KEY_GLOSSARY_LAST_ERROR, value)
+    }
+
+    fun glossaryLocalChangedAt(ctx: Context): Long =
+        prefs(ctx).getLong(KEY_GLOSSARY_LOCAL_CHANGED_AT, 0L)
+
+    fun markGlossaryLocalChange(ctx: Context) {
+        val now = System.currentTimeMillis()
+        val nextRevision = prefs(ctx).getLong(KEY_GLOSSARY_LOCAL_REVISION, 0L) + 1L
+        prefs(ctx).edit {
+            putLong(KEY_GLOSSARY_LOCAL_CHANGED_AT, now)
+            putLong(KEY_GLOSSARY_LOCAL_REVISION, nextRevision)
+        }
+    }
+
+    fun clearGlossaryLocalChange(ctx: Context) = prefs(ctx).edit {
+        remove(KEY_GLOSSARY_LOCAL_CHANGED_AT)
+    }
+
+    fun glossaryLocalRevision(ctx: Context): Long =
+        prefs(ctx).getLong(KEY_GLOSSARY_LOCAL_REVISION, 0L)
+
+    fun glossaryLastConflicts(ctx: Context): Int =
+        prefs(ctx).getInt(KEY_GLOSSARY_LAST_CONFLICTS, 0)
+
+    fun setGlossaryLastConflicts(
+        ctx: Context,
+        value: Int,
+    ) = prefs(ctx).edit { putInt(KEY_GLOSSARY_LAST_CONFLICTS, value) }
+
+    fun glossaryAutoSync(ctx: Context): Boolean =
+        prefs(ctx).getBoolean(KEY_GLOSSARY_AUTO_SYNC, true)
+
+    fun setGlossaryAutoSync(
+        ctx: Context,
+        value: Boolean,
+    ) = prefs(ctx).edit { putBoolean(KEY_GLOSSARY_AUTO_SYNC, value) }
 
     fun setTosBucket(
         ctx: Context,
@@ -108,4 +182,20 @@ object VoicePrefs {
     }
 
     private fun prefs(ctx: Context) = PreferenceManager.getDefaultSharedPreferences(ctx)
+
+    /** 旧版本把 TOS 密钥写在默认 SharedPreferences 里，会被 Auto Backup 带上。 */
+    private fun migrateLegacyTosCredentials(ctx: Context) {
+        val p = prefs(ctx)
+        val accessKey = p.getString(KEY_TOS_ACCESS_KEY, "").orEmpty().trim()
+        val secretKey = p.getString(KEY_TOS_SECRET_KEY, "").orEmpty().trim()
+        if (accessKey.isEmpty() && secretKey.isEmpty()) return
+        val stored = TosCredentialStore.load(ctx)
+        val mergedAccessKey = stored?.accessKeyId?.takeIf { it.isNotBlank() } ?: accessKey
+        val mergedSecretKey = stored?.secretAccessKey?.takeIf { it.isNotBlank() } ?: secretKey
+        TosCredentialStore.save(ctx, mergedAccessKey, mergedSecretKey)
+        p.edit {
+            remove(KEY_TOS_ACCESS_KEY)
+            remove(KEY_TOS_SECRET_KEY)
+        }
+    }
 }

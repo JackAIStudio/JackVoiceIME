@@ -48,25 +48,35 @@ object GlossarySyncClient {
         return Remote(parsed, output.etag.orEmpty())
     }
 
+    /** 云对象还不存在时返回 null；其他错误照常抛出。 */
+    fun pullOrNull(config: Config): Remote? =
+        try {
+            pull(config)
+        } catch (e: TosServerException) {
+            if (e.statusCode == 404 || e.code == "NoSuchKey") null else throw e
+        }
+
     fun push(
         config: Config,
         glossary: JSONObject,
-        baseEtag: String,
+        baseEtag: String?,
     ): Remote {
         val bytes = glossary.toString().toByteArray(Charsets.UTF_8)
         val client = client(config)
         val output =
             try {
-                client.putObject(
+                val input =
                     PutObjectInput()
                         .setBucket(config.bucket)
                         .setKey(config.key)
                         .setContent(bytes.inputStream())
                         .setContentLength(bytes.size.toLong())
-                        .setIfMatch(baseEtag),
-                )
+                if (baseEtag.isNullOrBlank()) input.setForbidOverwrite(true) else input.setIfMatch(baseEtag)
+                client.putObject(input)
             } catch (e: TosServerException) {
-                if (e.statusCode == 412 || e.code == "PreconditionFailed") {
+                if (e.statusCode == 412 || e.statusCode == 409 ||
+                    e.code == "PreconditionFailed" || e.code == "FileAlreadyExists"
+                ) {
                     throw ConflictException()
                 }
                 throw e
