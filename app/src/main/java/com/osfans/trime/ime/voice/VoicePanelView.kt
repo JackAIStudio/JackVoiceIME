@@ -25,8 +25,6 @@ import kotlin.math.min
 import kotlin.math.sin
 import kotlin.math.sqrt
 
-enum class VoiceState { Idle, Recording, Thinking }
-
 /**
  * 语音面板。所有位置都是从 Typeless 的截图里量出来的（面板按 320dp 计）：
  *

@@ -40,7 +40,15 @@ class VoiceCaptureService : Service() {
     ): Int {
         when (intent?.action) {
             ACTION_CANCEL -> {
-                VoiceEngine.cancel()
+                // 走会话而不是直接掐引擎：面板/顶栏的状态要跟着回到空闲。
+                if (VoiceSession.isBound) VoiceSession.cancel() else VoiceEngine.cancel()
+                stopSelf()
+                return START_NOT_STICKY
+            }
+
+            ACTION_STOP -> {
+                // 挂后台听写时唯一的「说完了」入口：停录、等终稿、自动上屏。
+                if (VoiceSession.isBound) VoiceSession.stop() else VoiceEngine.stopRecording()
                 stopSelf()
                 return START_NOT_STICKY
             }
@@ -67,15 +75,25 @@ class VoiceCaptureService : Service() {
                 Intent(this, VoiceCaptureService::class.java).setAction(ACTION_CANCEL),
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             )
+        val stopIntent =
+            PendingIntent.getService(
+                this,
+                1,
+                Intent(this, VoiceCaptureService::class.java).setAction(ACTION_STOP),
+                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
         val notification =
             NotificationCompat.Builder(this, CHANNEL_ID)
                 .setSmallIcon(R.drawable.ic_trime_status)
                 .setContentTitle(getString(R.string.voice_listening))
                 .setContentText(getString(R.string.voice_listening_hint))
+                // 点通知卡片 = 说完了（有些 ROM 不展示 action 按钮，卡片是唯一可靠的入口）。
+                .setContentIntent(stopIntent)
                 .setOngoing(true)
                 .setSilent(true)
                 .setPriority(NotificationCompat.PRIORITY_LOW)
-                .addAction(0, getString(R.string.voice_cancel), cancelIntent)
+                .addAction(R.drawable.ic_trime_status, getString(R.string.voice_stop), stopIntent)
+                .addAction(R.drawable.ic_trime_status, getString(R.string.voice_cancel), cancelIntent)
                 .build()
         ServiceCompat.startForeground(
             this,
@@ -114,6 +132,7 @@ class VoiceCaptureService : Service() {
         private const val CHANNEL_ID = "jackvoice_recording"
         private const val NOTIFICATION_ID = 0x4A43 // "JC"
         const val ACTION_CANCEL = "com.osfans.trime.voice.CANCEL"
+        const val ACTION_STOP = "com.osfans.trime.voice.STOP"
 
         /** 起前台服务 + 开始录音。调用方必须是用户刚点过的界面（输入法自己算）。 */
         fun start(ctx: Context) {

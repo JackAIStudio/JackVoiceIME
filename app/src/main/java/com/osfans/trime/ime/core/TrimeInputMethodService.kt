@@ -50,6 +50,7 @@ import com.osfans.trime.data.theme.ThemeScope
 import com.osfans.trime.ime.composition.CandidatesView
 import com.osfans.trime.ime.keyboard.InputFeedbackManager
 import com.osfans.trime.ime.voice.EnglishCompleter
+import com.osfans.trime.ime.voice.VoiceSession
 import com.osfans.trime.receiver.RimeIntentReceiver
 import com.osfans.trime.util.any
 import com.osfans.trime.util.findSectionFrom
@@ -223,6 +224,8 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
             }
         }
         InputFeedbackManager.init(this)
+        // 听写会话挂在服务上，不挂在语音面板窗口上：切模块、面板 detach 都不影响它。
+        VoiceSession.bind(this)
         registerReceiver()
         super.onCreate()
         Timber.d("onCreate")
@@ -355,6 +358,8 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
     }
 
     override fun onDestroy() {
+        // 输入法都没了，听写会话没人接结果：停掉麦克风、清空待插入。
+        VoiceSession.unbind()
         InputFeedbackManager.destroy()
         inputView = null
         recreateInputViewPrefs.forEach {
@@ -654,6 +659,10 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
                 candidatesView?.updateCursorAnchor(contentSize)
             }
         }
+        // 键盘收起期间识别好的语音结果在会话里排着，展开后补插到光标处。
+        if (VoiceSession.hasPending) {
+            postOnMain { VoiceSession.flushPending(force = false) }
+        }
     }
 
     override fun onFinishInputView(finishingInput: Boolean) {
@@ -685,6 +694,27 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
         lastCommittedText = text
         composingText = ""
         InputFeedbackManager.textCommitSpeak(text)
+    }
+
+    /**
+     * 语音结果现在能不能落到输入框。
+     *
+     * 键盘收起（切到别的 App）时先不插：输入连接可能已经失效，而且用户未必
+     * 还想把语音塞进那个框；[VoiceSession] 会先排队，下次展开再落。
+     */
+    fun isVoiceTargetReady(): Boolean = isInputViewShown && currentInputConnection != null
+
+    /**
+     * 用户正在拼写、但明确要语音结果先落（切回语音面板 / 开始新录音）时：
+     * 先把已经打出来的这截组合收尾，再让会话插入语音文本。
+     *
+     * 用 `finishComposingText` 而不是 `clearComposition`：用户手动拼到一半的字
+     * 至少留在输入框里，不能因为语音来了就被抹掉。
+     */
+    fun finishComposingForVoice() {
+        currentInputConnection?.finishComposingText()
+        composingText = ""
+        postRimeJob { clearComposition() }
     }
 
     /**
@@ -1114,6 +1144,10 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
         // 不靠候选更新去猜（候选和预编辑是两条消息，赶不上一个节拍）。
         inputView?.onComposingTextChanged(text)
         ic.endBatchEdit()
+        // 这一轮拼写结束（选完候选 / 清空）：等着的语音结果现在可以插到光标处了。
+        if (text.isEmpty()) {
+            VoiceSession.onComposingEnded()
+        }
     }
 
     fun getActiveText(type: Int): String {

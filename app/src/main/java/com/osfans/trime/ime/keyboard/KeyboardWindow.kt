@@ -12,6 +12,7 @@ import android.view.WindowInsets
 import android.view.inputmethod.EditorInfo
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.Toast
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.osfans.trime.R
@@ -30,6 +31,8 @@ import com.osfans.trime.ime.keyboard.KeyboardPrefs.isLandscapeMode
 import com.osfans.trime.ime.popup.PopupDelegate
 import com.osfans.trime.ime.voice.CandidatePanelView
 import com.osfans.trime.ime.voice.VoicePrefs
+import com.osfans.trime.ime.voice.VoiceSession
+import com.osfans.trime.ime.voice.VoiceState
 import com.osfans.trime.ime.voice.VoiceTab
 import com.osfans.trime.ime.voice.VoiceToolbarView
 import com.osfans.trime.ime.voice.VoiceWindow
@@ -138,6 +141,23 @@ class KeyboardWindow(di: DI) :
 
     private val keyboardActionListener = commonKeyboardActionListener.listener
 
+    /**
+     * 听写会话的观察者。
+     *
+     * 手动拼写时听写仍在后台跑：顶栏的 🎙 标出「录音中 / 处理中」，
+     * 点它回语音面板就能停。会话自己负责上屏，键盘这边不碰音频。
+     */
+    private val voiceSessionListener =
+        object : VoiceSession.Listener {
+            override fun onVoiceStateChanged(state: VoiceState) {
+                if (::toolbar.isInitialized) toolbar.setVoiceState(state)
+            }
+
+            override fun onVoiceNotice(text: String) {
+                runCatching { Toast.makeText(service, text, Toast.LENGTH_SHORT).show() }
+            }
+        }
+
     private var lastIsPortrait: Boolean? = null
     private var containerWidth: Int = 0
     private var allowedWidth: Int = 0
@@ -178,6 +198,8 @@ class KeyboardWindow(di: DI) :
                 bar.onCandidatePick = { index -> pickCandidate(index) }
                 bar.onExpandTap = { toggleCandidatePanel() }
                 bar.onHideTap = { service.requestHideSelf(0) }
+                // 候选行里的红色波形：听写在后台跑着时，从这里回语音面板停下来说完了。
+                bar.onVoiceFromComposing = { boardWindowManager.attachWindow(voiceWindow) }
                 // 候选行里的「拼/EN」：英文候选常驻，没有这一格就切不回中文。
                 bar.onLanguageSwitchTap = { switchLanguage() }
             }
@@ -692,6 +714,8 @@ class KeyboardWindow(di: DI) :
         if (rime.run { statusCached }.isAsciiMode) {
             service.lifecycleScope.launch { service.updateEnglishSuggestions() }
         }
+        // 后台可能还在录：顶栏把状态接上（addListener 会立刻回一次当前状态）。
+        VoiceSession.addListener(voiceSessionListener)
     }
 
     private fun syncToolbarActive() {
@@ -710,6 +734,7 @@ class KeyboardWindow(di: DI) :
     }
 
     override fun onDetached() {
+        VoiceSession.removeListener(voiceSessionListener)
         currentKeyboardView?.onDetach()
         englishMode = false
         setComposingToolbar(false)

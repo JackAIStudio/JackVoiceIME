@@ -56,21 +56,31 @@ object VoiceEngine {
     var isRecording = false
         private set
 
+    /** 已经停止录音、正在等服务端终稿。切模块 / 重建输入法时靠它恢复「处理中」。 */
+    @Volatile
+    var isWaitingFinal = false
+        private set
+
     fun setListener(value: Listener?) {
         listener = value
     }
 
-    /** 调用前必须已经 `startForeground(...)`，否则麦克风仍会被系统拒绝。 */
-    fun startRecording(ctx: Context) {
-        if (isRecording) return
+    /**
+     * 调用前必须已经 `startForeground(...)`，否则麦克风仍会被系统拒绝。
+     *
+     * @return 麦克风真的起来了才为 true；起不来时错误已经通过 listener 报出去。
+     */
+    fun startRecording(ctx: Context): Boolean {
+        if (isRecording) return false
         val key = VoicePrefs.apiKey(ctx)
         if (key.isBlank()) {
             post { listener?.onError("请先在设置里填语音 API Key") }
-            return
+            return false
         }
 
         result.setLength(0)
         stopped.set(false)
+        isWaitingFinal = false
 
         val client =
             VolcAsrClient(
@@ -115,17 +125,20 @@ object VoiceEngine {
         if (!rec.start()) {
             client.cancel()
             asr = null
-            return
+            post { listener?.onError("麦克风启动失败") }
+            return false
         }
         recorder = rec
         isRecording = true
         startedAt = System.currentTimeMillis()
+        return true
     }
 
     /** 停止录音、发结束包，等服务端二遍终稿。等不到就用一遍结果兜底。 */
     fun stopRecording() {
         if (!isRecording) return
         isRecording = false
+        isWaitingFinal = true
         stopAt = System.currentTimeMillis()
         Log.i(TAG, "停止录音：发末包，等终稿（上限 ${FINAL_TIMEOUT_MS}ms），当前一遍结果 ${result.length} 字")
         recorder?.stop()
@@ -139,6 +152,7 @@ object VoiceEngine {
     /** 直接丢弃，不上屏。 */
     fun cancel() {
         isRecording = false
+        isWaitingFinal = false
         stopped.set(true)
         recorder?.stop()
         recorder = null
@@ -160,6 +174,8 @@ object VoiceEngine {
         }
         main.removeCallbacksAndMessages(null)
         val raw = result.toString()
+        isRecording = false
+        isWaitingFinal = false
         recorder?.stop()
         recorder = null
         asr?.cancel()
@@ -191,6 +207,7 @@ object VoiceEngine {
         asr = null
         result.setLength(0)
         isRecording = false
+        isWaitingFinal = false
         Log.e(TAG, "识别失败：$message（停止后 ${elapsedSinceStop()}ms）")
         stopAt = 0L
         post { listener?.onLevel(0f) }
@@ -201,8 +218,7 @@ object VoiceEngine {
         if (Looper.myLooper() == Looper.getMainLooper()) block() else main.post(block)
     }
 
-    private fun elapsedSinceStop(): Long =
-        if (stopAt > 0) System.currentTimeMillis() - stopAt else -1L
+    private fun elapsedSinceStop(): Long = if (stopAt > 0) System.currentTimeMillis() - stopAt else -1L
 
     private const val TAG = "JackVoice"
 

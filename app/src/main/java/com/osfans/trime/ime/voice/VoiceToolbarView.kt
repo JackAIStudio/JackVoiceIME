@@ -51,6 +51,9 @@ class VoiceToolbarView(
     /** 点候选行里的语言小键：切到另一种语言（中文 ↔ 英文）。 */
     var onLanguageSwitchTap: (() -> Unit)? = null
 
+    /** 点候选行里的红色波形：回语音面板（听写在后台跑着时）。 */
+    var onVoiceFromComposing: (() -> Unit)? = null
+
     private val brand =
         TextView(context).apply {
             text = "JackVoice"
@@ -116,6 +119,27 @@ class VoiceToolbarView(
             }
         }
 
+    /**
+     * 候选行里的「后台听写还在跑」入口。
+     *
+     * 候选一出现，「品牌 + 胶囊」整行让给候选，那颗 🎙 也就看不见了——录音中
+     * 打拼音时用户想停下来说完了，会找不到回语音面板的入口。这一格只在听写
+     * 非空闲时出现（红色波形），点它直接回语音面板。
+     */
+    private val composingVoice =
+        FrameLayout(context).apply {
+            visibility = View.GONE
+            isClickable = true
+            setOnClickListener {
+                InputFeedbackManager.keyPressVibrate(this)
+                onVoiceFromComposing?.invoke()
+            }
+            addView(
+                WaveGlyphView(context).apply { voiceState = VoiceState.Recording },
+                LayoutParams(dp(20), dp(20)).apply { gravity = Gravity.CENTER },
+            )
+        }
+
     private val composingRow =
         LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -124,6 +148,10 @@ class VoiceToolbarView(
             addView(
                 candidates,
                 LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f),
+            )
+            addView(
+                composingVoice,
+                LinearLayout.LayoutParams(dp(40), LinearLayout.LayoutParams.MATCH_PARENT),
             )
             addView(
                 langSwitch,
@@ -147,7 +175,7 @@ class VoiceToolbarView(
         )
         addView(
             switcher,
-            LayoutParams(dp(176), dp(36)).apply {
+            LayoutParams(dp(176), dp(40)).apply {
                 gravity = Gravity.END or Gravity.CENTER_VERTICAL
                 marginEnd = dp(15)
             },
@@ -194,26 +222,35 @@ class VoiceToolbarView(
         langSwitch.text = if (tab == VoiceTab.English) "拼" else "EN"
     }
 
+    /**
+     * 后台听写的状态落在 🎙 这个小波形的颜色上：
+     * 录音中红、等终稿橙、空闲黑。切到拼音键盘也能一眼看出还在录；
+     * 候选行里那格红色波形也靠它显隐。
+     */
+    fun setVoiceState(state: VoiceState) {
+        (waveCell.getChildAt(0) as? WaveGlyphView)?.voiceState = state
+        (composingVoice.getChildAt(0) as? WaveGlyphView)?.voiceState = state
+        composingVoice.visibility = if (state == VoiceState.Idle) View.GONE else View.VISIBLE
+    }
+
     private fun cell(
         content: View,
         onClick: () -> Unit,
-    ): FrameLayout =
-        FrameLayout(context).apply {
-            isClickable = true
-            setOnClickListener {
-                InputFeedbackManager.keyPressVibrate(this)
-                onClick()
-            }
-            addView(content, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+    ): FrameLayout = FrameLayout(context).apply {
+        isClickable = true
+        setOnClickListener {
+            InputFeedbackManager.keyPressVibrate(this)
+            onClick()
         }
+        addView(content, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+    }
 
-    private fun label(text: String): TextView =
-        TextView(context).apply {
-            this.text = text
-            gravity = Gravity.CENTER
-            setTextColor(TEXT2)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-        }
+    private fun label(text: String): TextView = TextView(context).apply {
+        this.text = text
+        gravity = Gravity.CENTER
+        setTextColor(TEXT2)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+    }
 
     private fun rounded(
         color: Int,
@@ -243,9 +280,23 @@ class VoiceToolbarView(
 class WaveGlyphView(
     context: Context,
 ) : View(context) {
+    /** 听写状态：录音中变红、等终稿变橙，切到拼音键盘也能看出后台还在工作。 */
+    var voiceState: VoiceState = VoiceState.Idle
+        set(value) {
+            if (field == value) return
+            field = value
+            paint.color =
+                when (value) {
+                    VoiceState.Recording -> RECORDING
+                    VoiceState.Thinking -> THINKING
+                    VoiceState.Idle -> IDLE
+                }
+            invalidate()
+        }
+
     private val paint =
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = 0xFF111111.toInt()
+            color = IDLE
             strokeCap = Paint.Cap.ROUND
         }
 
@@ -266,6 +317,12 @@ class WaveGlyphView(
     }
 
     private fun dp(value: Float): Float = value * resources.displayMetrics.density
+
+    private companion object {
+        val IDLE = 0xFF111111.toInt()
+        val RECORDING = 0xFFE5484D.toInt()
+        val THINKING = 0xFFF5A623.toInt()
+    }
 }
 
 /** 候选展开箭头：画出来的，几何中心对齐，不用 font 里的 `⌄`（那个会偏下）。 */

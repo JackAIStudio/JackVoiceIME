@@ -254,7 +254,8 @@
     <string name="star_success">Star success</string>
     <string name="ignore_system_gesture_insets">Ignore system gesture insets</string>
     <string name="voice_listening">正在聆听…</string>
-    <string name="voice_listening_hint">点键盘中间的大圆结束</string>
+    <string name="voice_listening_hint">切到拼音打字也不会中断，说完了点这条通知</string>
+    <string name="voice_stop">完成</string>
     <string name="voice_cancel">取消</string>
     <string name="voice_channel_name">语音听写</string>
     <string name="voice_channel_desc">录音时在通知栏显示状态</string>

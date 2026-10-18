@@ -14,18 +14,19 @@ import com.osfans.trime.ime.keyboard.KeyboardWindow
 import com.osfans.trime.ime.window.BoardWindow
 import com.osfans.trime.ime.window.BoardWindowManager
 import com.osfans.trime.ime.window.ResidentWindow
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.kodein.di.DI
 import org.kodein.di.instance
-import timber.log.Timber
 
 /**
  * 语音面板窗口。与 KeyboardWindow / LiquidWindow 平级：
  * 它占据输入法的键盘区整块位置（不是悬浮窗，也不抢宿主输入框的焦点）。
  *
- * 链路：点击说话 → 起麦克风前台服务（拿麦克风的前提）→ 16k 单声道录音
- *      → 豆包流式（带 59 条热词）→ 二遍终稿 → 79 条替换规则 → commitText 落到当前输入框。
+ * **面板只是 [VoiceSession] 的一个观察者**：录音、识别、上屏都在会话里，
+ * 切到拼音 / EN 把这个窗口 detach 掉，听写照样在后台跑；切回来时按会话状态
+ * 恢复画面（录音中 / 处理中 / 空闲），不会重置成「点击说话」。
  *
  * 上屏后**留在语音面板**（Typeless 也是这样）；要打字按顶栏的「拼」/「EN」
  * 或左下角的键盘键。
@@ -33,13 +34,13 @@ import timber.log.Timber
 class VoiceWindow(di: DI) :
     BoardWindow.NoBarBoardWindow(di),
     ResidentWindow,
-    VoiceEngine.Listener {
+    VoiceSession.Listener {
     private val service: TrimeInputMethodService by instance()
     private val windowManager: BoardWindowManager by instance()
     private val keyboardWindow: KeyboardWindow by instance()
 
     private var panel: VoicePanelView? = null
-    private var state = VoiceState.Idle
+    private var noticeJob: Job? = null
 
     companion object : ResidentWindow.Key
 
@@ -54,7 +55,8 @@ class VoiceWindow(di: DI) :
         view.onBackspaceTap = { service.sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL) }
         view.onAtTap = { service.commitText("@") }
         view.onActionTap = { performEditorAction() }
-        // 顶部切换胶囊的「拼」/「EN」：切到拼音/英文键盘，并同步 Rime 的 ascii_mode
+        // 顶部切换胶囊的「拼」/「EN」：切到拼音/英文键盘，并同步 Rime 的 ascii_mode。
+        // 注意**不要**在这里 cancel 听写——手动拼写和听写是并行的两件事。
         view.toolbar.onPinyinTap = {
             service.switchInputLanguage(false)
             switchToKeyboard(VoiceTab.Pinyin)
@@ -68,87 +70,63 @@ class VoiceWindow(di: DI) :
     }
 
     override fun onAttached() {
-        VoiceEngine.setListener(this)
-        setState(VoiceState.Idle)
+        VoiceSession.addListener(this)
         panel?.setActionLabel(actionLabel())
         panel?.toolbar?.setActive(VoiceTab.Voice)
         // 记住用户停在这一屏：下次展开键盘先回到语音面板（默认也是它）。
         VoicePrefs.setLastTab(context, VoiceTab.Voice)
+        // 用户明确回到面板：上一轮残留的识别结果该落就落，别一直排着。
+        VoiceSession.flushPending(force = true)
     }
 
     override fun onDetached() {
-        VoiceEngine.setListener(null)
-        VoiceEngine.cancel()
-        VoiceCaptureService.stop(service)
+        // 只解绑 UI，**不动**听写会话：切到键盘后录音/识别继续。
+        VoiceSession.removeListener(this)
+        noticeJob?.cancel()
         panel?.setLevel(0f)
-        setState(VoiceState.Idle)
     }
 
-    private fun setState(next: VoiceState) {
-        state = next
-        panel?.setState(next)
+    // ── VoiceSession 回调（会话保证在主线程）────────────────────────────
+
+    override fun onVoiceStateChanged(state: VoiceState) {
+        val view = panel ?: return
+        view.setState(state)
+        // 录音中切走再切回来：把最后一段流式结果补上，预览不会变空。
+        if (state == VoiceState.Recording && VoiceSession.lastPartial.isNotEmpty()) {
+            view.setPreview(VoiceSession.lastPartial)
+        }
     }
+
+    override fun onVoicePartial(text: String) {
+        panel?.setPreview(text)
+    }
+
+    override fun onVoiceLevel(level: Float) {
+        panel?.setLevel(level)
+    }
+
+    override fun onVoiceNotice(text: String) {
+        val view = panel ?: return
+        view.showMessage(text)
+        noticeJob?.cancel()
+        noticeJob =
+            service.lifecycleScope.launch {
+                delay(2600)
+                if (VoiceSession.state == VoiceState.Idle) view.setState(VoiceState.Idle)
+            }
+    }
+
+    // ── 麦克风键 ────────────────────────────────────────────────────────
 
     private fun onOrbTap() {
-        when (state) {
-            VoiceState.Idle -> startRecording()
-            VoiceState.Recording -> stopRecording()
+        when (VoiceSession.state) {
+            VoiceState.Idle -> VoiceSession.start()
+            VoiceState.Recording -> VoiceSession.stop()
             VoiceState.Thinking -> Unit
         }
     }
 
-    private fun startRecording() {
-        VoiceEngine.setListener(this)
-        // 前台服务是「尽力而为」：能起来最好（前台态更容易拿到麦克风），
-        // 起不来也不影响录音——录音本体在 VoiceEngine 里。
-        VoiceCaptureService.start(service)
-        VoiceEngine.startRecording(service)
-        setState(VoiceState.Recording)
-    }
-
-    private fun stopRecording() {
-        setState(VoiceState.Thinking)
-        VoiceEngine.stopRecording()
-        VoiceCaptureService.stop(service)
-    }
-
-    // ── VoiceEngine 回调（引擎保证在主线程）────────────────────────────────
-
-    override fun onPartial(text: String) {
-        // 流式结果实时显示在面板里，不用等终稿上屏才看到听到了什么。
-        panel?.setPreview(text)
-    }
-
-    override fun onLevel(level: Float) {
-        panel?.setLevel(level)
-    }
-
-    override fun onFinal(text: String) {
-        service.lifecycleScope.launch {
-            VoiceCaptureService.stop(service)
-            panel?.setPreview("")
-            val processed = if (text.isBlank()) "" else PostProcessor.process(text, service)
-            if (processed.isNotBlank()) {
-                service.commitText(processed)
-            } else {
-                Timber.w("语音识别结果为空，未上屏")
-            }
-            setState(VoiceState.Idle)
-        }
-    }
-
-    override fun onError(message: String) {
-        service.lifecycleScope.launch {
-            VoiceCaptureService.stop(service)
-            panel?.setPreview("")
-            panel?.showMessage("识别失败：$message")
-            state = VoiceState.Idle
-            delay(2600)
-            if (state == VoiceState.Idle) panel?.setState(VoiceState.Idle)
-        }
-    }
-
-    // ── 底栏与顶栏 ────────────────────────────────────────────────────────
+    // ── 底栏与顶栏 ───────────────────────────────────────────────────────
 
     /** 弹出系统输入法选择器——这就是那颗地球键该干的事。 */
     private fun showImePicker() {
@@ -159,8 +137,6 @@ class VoiceWindow(di: DI) :
     }
 
     private fun switchToKeyboard(tab: VoiceTab? = null) {
-        VoiceEngine.cancel()
-        VoiceCaptureService.stop(service)
         windowManager.attachWindow(keyboardWindow)
         // attach 时 Rime 的 ascii_mode 还没切完，键盘窗口会先按旧值记一次；
         // 这里在 attach 之后用用户真正点的目标盖回去，下次展开才是对的。
