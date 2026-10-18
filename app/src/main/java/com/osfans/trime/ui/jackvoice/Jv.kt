@@ -22,14 +22,15 @@ import com.osfans.trime.R
 
 /** JackVoice 主界面用的一小组构建块。原生 View 手搭，配色对齐 Typeless。 */
 object Jv {
-    const val BG = 0xFFFFFFFF.toInt()
-    const val CARD = 0xFFF5F5F5.toInt()
-    const val CARD_STRONG = 0xFFEFEFEF.toInt()
-    const val TEXT = 0xFF111111.toInt()
-    const val TEXT2 = 0xFF8A8A8A.toInt()
-    const val ACCENT = 0xFF2B6BFE.toInt()
-    const val DANGER = 0xFFE5484D.toInt()
-    const val DIVIDER = 0xFFEDEDED.toInt()
+    val BG: Int get() = JvColors.bg
+    val CARD: Int get() = JvColors.card
+    val CARD_STRONG: Int get() = JvColors.cardStrong
+    val TEXT: Int get() = JvColors.text
+    val TEXT2: Int get() = JvColors.textSecondary
+    val ACCENT: Int get() = JvColors.accent
+    val DANGER: Int get() = JvColors.danger
+    val DIVIDER: Int get() = JvColors.divider
+    val SEGMENT: Int get() = JvColors.segmentSelected
 
     fun dp(
         ctx: Context,
@@ -39,12 +40,11 @@ object Jv {
     fun round(
         color: Int,
         radiusPx: Int,
-    ): GradientDrawable =
-        GradientDrawable().apply {
-            shape = GradientDrawable.RECTANGLE
-            cornerRadius = radiusPx.toFloat()
-            setColor(color)
-        }
+    ): GradientDrawable = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = radiusPx.toFloat()
+        setColor(color)
+    }
 
     fun text(
         ctx: Context,
@@ -52,51 +52,47 @@ object Jv {
         sizeSp: Float,
         color: Int = TEXT,
         bold: Boolean = false,
-    ): TextView =
-        TextView(ctx).apply {
-            text = value
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp)
-            setTextColor(color)
-            if (bold) typeface = Typeface.DEFAULT_BOLD
-            includeFontPadding = false
-        }
+    ): TextView = TextView(ctx).apply {
+        text = value
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, sizeSp)
+        setTextColor(color)
+        if (bold) typeface = Typeface.DEFAULT_BOLD
+        includeFontPadding = false
+    }
 
     /** 页面大标题，对应 Typeless 各页顶部那个粗体标题。 */
     fun pageTitle(
         ctx: Context,
         value: String,
-    ): TextView =
-        text(ctx, value, 30f, TEXT, bold = true).apply {
-            setPadding(dp(ctx, 20), dp(ctx, 22), dp(ctx, 20), dp(ctx, 12))
-        }
+    ): TextView = text(ctx, value, 30f, TEXT, bold = true).apply {
+        setPadding(dp(ctx, 20), dp(ctx, 22), dp(ctx, 20), dp(ctx, 12))
+    }
 
     fun sectionLabel(
         ctx: Context,
         value: String,
-    ): TextView =
-        text(ctx, value, 13f, TEXT2).apply {
-            setPadding(dp(ctx, 24), dp(ctx, 18), dp(ctx, 24), dp(ctx, 8))
-        }
+    ): TextView = text(ctx, value, 13f, TEXT2).apply {
+        setPadding(dp(ctx, 24), dp(ctx, 18), dp(ctx, 24), dp(ctx, 8))
+    }
 
     /** 一张圆角卡片，竖向堆内容。 */
     fun card(
         ctx: Context,
         color: Int = CARD,
         radiusDp: Int = 18,
-    ): LinearLayout =
-        LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            background = round(color, dp(ctx, radiusDp))
-            layoutParams =
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply {
-                    marginStart = dp(ctx, 16)
-                    marginEnd = dp(ctx, 16)
-                    topMargin = dp(ctx, 8)
-                }
-        }
+    ): LinearLayout = LinearLayout(ctx).apply {
+        orientation = LinearLayout.VERTICAL
+        background = round(color, dp(ctx, radiusDp))
+        layoutParams =
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply {
+                marginStart = dp(ctx, 16)
+                marginEnd = dp(ctx, 16)
+                topMargin = dp(ctx, 8)
+            }
+    }
 
     /** 卡片里的一行：标题 +（可选）副标题 +（可选）右侧箭头/值。 */
     fun row(
@@ -153,41 +149,39 @@ object Jv {
         value: String,
         unit: String,
         label: String,
-    ): View =
-        LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(ctx, 18), dp(ctx, 16), dp(ctx, 12), dp(ctx, 16))
-            val head =
-                LinearLayout(ctx).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.BOTTOM
-                    addView(text(ctx, value, 27f, TEXT, bold = true))
-                    if (unit.isNotEmpty()) {
-                        addView(
-                            text(ctx, unit, 14f, TEXT).apply {
-                                setPadding(dp(ctx, 4), 0, 0, dp(ctx, 3))
-                            },
-                        )
-                    }
+    ): View = LinearLayout(ctx).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(ctx, 18), dp(ctx, 16), dp(ctx, 12), dp(ctx, 16))
+        val head =
+            LinearLayout(ctx).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.BOTTOM
+                addView(text(ctx, value, 27f, TEXT, bold = true))
+                if (unit.isNotEmpty()) {
+                    addView(
+                        text(ctx, unit, 14f, TEXT).apply {
+                            setPadding(dp(ctx, 4), 0, 0, dp(ctx, 3))
+                        },
+                    )
                 }
-            addView(head)
-            addView(
-                text(ctx, label, 13f, TEXT2).apply {
-                    setPadding(0, dp(ctx, 8), 0, 0)
-                },
-            )
-        }
+            }
+        addView(head)
+        addView(
+            text(ctx, label, 13f, TEXT2).apply {
+                setPadding(0, dp(ctx, 8), 0, 0)
+            },
+        )
+    }
 
     fun icon(
         ctx: Context,
         resId: Int,
         tint: Int,
-    ): ImageView =
-        ImageView(ctx).apply {
-            setImageResource(resId)
-            setColorFilter(tint)
-            scaleType = ImageView.ScaleType.FIT_CENTER
-        }
+    ): ImageView = ImageView(ctx).apply {
+        setImageResource(resId)
+        setColorFilter(tint)
+        scaleType = ImageView.ScaleType.FIT_CENTER
+    }
 
     /** 小圆按钮里的图标（列表右侧的复制/删除）。 */
     fun iconButton(
@@ -195,68 +189,63 @@ object Jv {
         resId: Int,
         tint: Int,
         onClick: () -> Unit,
-    ): ImageView =
-        icon(ctx, resId, tint).apply {
-            background = round(CARD_STRONG, dp(ctx, 17))
-            val pad = dp(ctx, 8)
-            setPadding(pad, pad, pad, pad)
-            isClickable = true
-            setOnClickListener { onClick() }
-        }
+    ): ImageView = icon(ctx, resId, tint).apply {
+        background = round(CARD_STRONG, dp(ctx, 17))
+        val pad = dp(ctx, 8)
+        setPadding(pad, pad, pad, pad)
+        isClickable = true
+        setOnClickListener { onClick() }
+    }
 
     /** 主按钮（Typeless 那种蓝色实心胶囊）。 */
     fun primaryButton(
         ctx: Context,
         label: String,
         onClick: () -> Unit,
-    ): TextView =
-        text(ctx, label, 16f, 0xFFFFFFFF.toInt(), bold = true).apply {
-            gravity = Gravity.CENTER
-            background = round(ACCENT, dp(ctx, 24))
-            isClickable = true
-            setOnClickListener { onClick() }
-            layoutParams =
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    dp(ctx, 48),
-                ).apply {
-                    marginStart = dp(ctx, 16)
-                    marginEnd = dp(ctx, 16)
-                    topMargin = dp(ctx, 12)
-                }
-        }
+    ): TextView = text(ctx, label, 16f, JvColors.onAccent, bold = true).apply {
+        gravity = Gravity.CENTER
+        background = round(ACCENT, dp(ctx, 24))
+        isClickable = true
+        setOnClickListener { onClick() }
+        layoutParams =
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(ctx, 48),
+            ).apply {
+                marginStart = dp(ctx, 16)
+                marginEnd = dp(ctx, 16)
+                topMargin = dp(ctx, 12)
+            }
+    }
 
-    fun divider(ctx: Context): View =
-        View(ctx).apply {
-            setBackgroundColor(DIVIDER)
-            layoutParams =
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    dp(ctx, 1),
-                ).apply {
-                    marginStart = dp(ctx, 18)
-                    marginEnd = dp(ctx, 18)
-                }
-        }
+    fun divider(ctx: Context): View = View(ctx).apply {
+        setBackgroundColor(DIVIDER)
+        layoutParams =
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                dp(ctx, 1),
+            ).apply {
+                marginStart = dp(ctx, 18)
+                marginEnd = dp(ctx, 18)
+            }
+    }
 
     /** 页面外壳：可滚动 + 统一内边距。 */
-    fun page(content: View): ScrollView =
-        ScrollView(content.context).apply {
-            isFillViewport = true
-            addView(
-                content,
-                FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ),
-            )
-        }
+    fun page(content: View): ScrollView = ScrollView(content.context).apply {
+        isFillViewport = true
+        addView(
+            content,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ),
+        )
+    }
 
-    fun column(ctx: Context): LinearLayout =
-        LinearLayout(ctx).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, 0, 0, dp(ctx, 28))
-        }
+    fun column(ctx: Context): LinearLayout = LinearLayout(ctx).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(0, 0, 0, dp(ctx, 28))
+    }
 
     fun tintedDrawable(
         ctx: Context,
@@ -272,12 +261,11 @@ object Jv {
         return if (hours > 0) "$hours" to "hr $minutes min" else "$minutes" to "min"
     }
 
-    fun humanCount(value: Int): Pair<String, String> =
-        if (value >= 1000) {
-            val k = value / 1000.0
-            val s = if (k >= 10) "${k.toInt()}" else String.format("%.1f", k)
-            s to "K 字"
-        } else {
-            "$value" to "字"
-        }
+    fun humanCount(value: Int): Pair<String, String> = if (value >= 1000) {
+        val k = value / 1000.0
+        val s = if (k >= 10) "${k.toInt()}" else String.format("%.1f", k)
+        s to "K 字"
+    } else {
+        "$value" to "字"
+    }
 }

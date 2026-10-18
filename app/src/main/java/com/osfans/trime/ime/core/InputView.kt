@@ -217,6 +217,8 @@ class InputView(
         keyboardBackground.imageDrawable = scope.drawable("keyboard_background")
         popup.refreshColors()
         keyboardWindow.refreshColors()
+        voiceWindow.refreshColors()
+        composingBar.refreshColors()
         inputBar.refreshColors()
         preedit.refreshColors()
         windowManager.refreshColors()

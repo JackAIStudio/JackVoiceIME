@@ -18,6 +18,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import com.osfans.trime.core.CandidateProto
 import com.osfans.trime.ime.keyboard.InputFeedbackManager
+import com.osfans.trime.ui.jackvoice.JvColors
 
 /** 顶栏切换器里的几个位置。Hide 不是「语言」，只是收起键盘。 */
 enum class VoiceTab { Voice, Pinyin, English, Hide }
@@ -57,23 +58,30 @@ class VoiceToolbarView(
     private val brand =
         TextView(context).apply {
             text = "JackVoice"
-            setTextColor(TEXT)
+            setTextColor(JvColors.text)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER_VERTICAL
         }
 
-    private val waveCell = cell(WaveGlyphView(context)) { onVoiceTap?.invoke() }
+    private val waveGlyph = WaveGlyphView(context)
+    private val composingWaveGlyph = WaveGlyphView(context).apply { voiceState = VoiceState.Recording }
+    private val chevronGlyph = ChevronGlyphView(context)
+    private val hideGlyph = HideKeyboardGlyphView(context)
+
+    private val waveCell = cell(waveGlyph) { onVoiceTap?.invoke() }
     private val pinyinCell = cell(label("拼")) { onPinyinTap?.invoke() }
     private val englishCell = cell(label("EN")) { onEnglishTap?.invoke() }
-    private val hideCell = cell(HideKeyboardGlyphView(context)) { onHideTap?.invoke() }
+    private val hideCell = cell(hideGlyph) { onHideTap?.invoke() }
 
     private val cells = listOf(waveCell, pinyinCell, englishCell)
+
+    private var activeTab = VoiceTab.Voice
 
     private val switcher =
         LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
-            background = rounded(WHITE, dp(18))
+            background = rounded(JvColors.keyBg, dp(18))
             setPadding(dp(3), dp(3), dp(3), dp(3))
             addView(waveCell, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
             addView(pinyinCell, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f))
@@ -94,7 +102,7 @@ class VoiceToolbarView(
                 onExpandTap?.invoke()
             }
             addView(
-                ChevronGlyphView(context),
+                chevronGlyph,
                 LayoutParams(dp(18), dp(18)).apply { gravity = Gravity.CENTER },
             )
         }
@@ -110,7 +118,7 @@ class VoiceToolbarView(
     private val langSwitch =
         TextView(context).apply {
             gravity = Gravity.CENTER
-            setTextColor(TEXT2)
+            setTextColor(JvColors.textSecondary)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
             isClickable = true
             setOnClickListener {
@@ -135,7 +143,7 @@ class VoiceToolbarView(
                 onVoiceFromComposing?.invoke()
             }
             addView(
-                WaveGlyphView(context).apply { voiceState = VoiceState.Recording },
+                composingWaveGlyph,
                 LayoutParams(dp(20), dp(20)).apply { gravity = Gravity.CENTER },
             )
         }
@@ -209,17 +217,33 @@ class VoiceToolbarView(
 
     /** 展开状态时箭头朝上，再点收起。 */
     fun setExpanded(expanded: Boolean) {
-        (expandButton.getChildAt(0) as? ChevronGlyphView)?.pointsUp = expanded
+        chevronGlyph.pointsUp = expanded
     }
 
     fun setActive(tab: VoiceTab) {
+        activeTab = tab
         cells.forEachIndexed { i, cell ->
             val on = i == tab.ordinal
-            cell.background = if (on) rounded(ACTIVE, dp(13)) else null
-            (cell.getChildAt(0) as? TextView)?.setTextColor(if (on) TEXT else TEXT2)
+            cell.background = if (on) rounded(JvColors.toolbarActive, dp(13)) else null
+            (cell.getChildAt(0) as? TextView)?.setTextColor(
+                if (on) JvColors.text else JvColors.textSecondary,
+            )
         }
         // 候选行的小键显示「要切过去的语言」，别显示当前语言——中文时显示 EN。
         langSwitch.text = if (tab == VoiceTab.English) "拼" else "EN"
+    }
+
+    /** 外观模式切换后重新取一遍色，不重建控件。 */
+    fun refreshColors() {
+        brand.setTextColor(JvColors.text)
+        switcher.background = rounded(JvColors.keyBg, dp(18))
+        langSwitch.setTextColor(JvColors.textSecondary)
+        setActive(activeTab)
+        candidates.refreshColors()
+        chevronGlyph.refreshColors()
+        hideGlyph.refreshColors()
+        waveGlyph.refreshColors()
+        composingWaveGlyph.refreshColors()
     }
 
     /**
@@ -228,8 +252,8 @@ class VoiceToolbarView(
      * 候选行里那格红色波形也靠它显隐。
      */
     fun setVoiceState(state: VoiceState) {
-        (waveCell.getChildAt(0) as? WaveGlyphView)?.voiceState = state
-        (composingVoice.getChildAt(0) as? WaveGlyphView)?.voiceState = state
+        waveGlyph.voiceState = state
+        composingWaveGlyph.voiceState = state
         composingVoice.visibility = if (state == VoiceState.Idle) View.GONE else View.VISIBLE
     }
 
@@ -248,7 +272,7 @@ class VoiceToolbarView(
     private fun label(text: String): TextView = TextView(context).apply {
         this.text = text
         gravity = Gravity.CENTER
-        setTextColor(TEXT2)
+        setTextColor(JvColors.textSecondary)
         setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
     }
 
@@ -268,11 +292,6 @@ class VoiceToolbarView(
 
         /** 顶栏距键盘区顶部的留白。语音面板和打字键盘用同一个值，切过去胶囊不会上下跳。 */
         const val TOP_MARGIN_DP = 11
-
-        private const val WHITE = 0xFFFFFFFF.toInt()
-        private const val ACTIVE = 0xFFEFEFEF.toInt()
-        private const val TEXT = 0xFF111111.toInt()
-        private const val TEXT2 = 0xFF8A8A8A.toInt()
     }
 }
 
@@ -285,20 +304,27 @@ class WaveGlyphView(
         set(value) {
             if (field == value) return
             field = value
-            paint.color =
-                when (value) {
-                    VoiceState.Recording -> RECORDING
-                    VoiceState.Thinking -> THINKING
-                    VoiceState.Idle -> IDLE
-                }
+            paint.color = colorFor(value)
             invalidate()
         }
 
     private val paint =
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = IDLE
+            color = colorFor(VoiceState.Idle)
             strokeCap = Paint.Cap.ROUND
         }
+
+    /** 外观模式切换后重新取色。 */
+    fun refreshColors() {
+        paint.color = colorFor(voiceState)
+        invalidate()
+    }
+
+    private fun colorFor(state: VoiceState): Int = when (state) {
+        VoiceState.Recording -> JvColors.recording
+        VoiceState.Thinking -> JvColors.thinking
+        VoiceState.Idle -> JvColors.text
+    }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
@@ -317,12 +343,6 @@ class WaveGlyphView(
     }
 
     private fun dp(value: Float): Float = value * resources.displayMetrics.density
-
-    private companion object {
-        val IDLE = 0xFF111111.toInt()
-        val RECORDING = 0xFFE5484D.toInt()
-        val THINKING = 0xFFF5A623.toInt()
-    }
 }
 
 /** 候选展开箭头：画出来的，几何中心对齐，不用 font 里的 `⌄`（那个会偏下）。 */
@@ -338,12 +358,17 @@ class ChevronGlyphView(
     private val paint =
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
-            color = 0xFF8A8A8A.toInt()
+            color = JvColors.textSecondary
             strokeCap = Paint.Cap.ROUND
             strokeJoin = Paint.Join.ROUND
         }
 
     private val path = Path()
+
+    fun refreshColors() {
+        paint.color = JvColors.textSecondary
+        invalidate()
+    }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
@@ -373,12 +398,17 @@ class HideKeyboardGlyphView(
     private val paint =
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
-            color = 0xFF111111.toInt()
+            color = JvColors.text
             strokeCap = Paint.Cap.ROUND
             strokeJoin = Paint.Join.ROUND
         }
 
     private val path = Path()
+
+    fun refreshColors() {
+        paint.color = JvColors.text
+        invalidate()
+    }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)

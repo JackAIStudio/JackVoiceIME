@@ -14,6 +14,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import com.osfans.trime.core.CandidateProto
 import com.osfans.trime.ime.keyboard.InputFeedbackManager
+import com.osfans.trime.ui.jackvoice.JvColors
 
 /**
  * 候选词条。
@@ -29,6 +30,9 @@ class CandidateStripView(
 ) : HorizontalScrollView(context) {
     /** 参数是候选在**全量列表**里的下标。 */
     var onPick: ((Int) -> Unit)? = null
+
+    private var lastItems: Array<CandidateProto> = emptyArray()
+    private var lastHighlighted = 0
 
     private val row =
         LinearLayout(context).apply {
@@ -48,6 +52,8 @@ class CandidateStripView(
         items: Array<CandidateProto>,
         highlighted: Int,
     ) {
+        lastItems = items
+        lastHighlighted = highlighted
         row.removeAllViews()
         items.forEachIndexed { index, candidate ->
             row.addView(item(candidate, index == highlighted, index))
@@ -55,7 +61,14 @@ class CandidateStripView(
         scrollTo(0, 0)
     }
 
+    /** 外观模式变化后按当前色板重建一遍，候选内容本身不变。 */
+    fun refreshColors() {
+        if (lastItems.isEmpty()) return
+        update(lastItems, lastHighlighted)
+    }
+
     fun clear() {
+        lastItems = emptyArray()
         row.removeAllViews()
     }
 
@@ -63,25 +76,24 @@ class CandidateStripView(
         candidate: CandidateProto,
         highlighted: Boolean,
         index: Int,
-    ): TextView =
-        TextView(context).apply {
-            text = candidate.text
-            setTextColor(TEXT)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
-            includeFontPadding = false
-            gravity = Gravity.CENTER
-            maxLines = 1
-            setPadding(dp(9), dp(5), dp(9), dp(5))
-            if (highlighted) {
-                typeface = Typeface.DEFAULT_BOLD
-                background = rounded(HIGHLIGHT, dp(11))
-            }
-            isClickable = true
-            setOnClickListener {
-                InputFeedbackManager.keyPressVibrate(this)
-                onPick?.invoke(index)
-            }
+    ): TextView = TextView(context).apply {
+        text = candidate.text
+        setTextColor(JvColors.text)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
+        includeFontPadding = false
+        gravity = Gravity.CENTER
+        maxLines = 1
+        setPadding(dp(9), dp(5), dp(9), dp(5))
+        if (highlighted) {
+            typeface = Typeface.DEFAULT_BOLD
+            background = rounded(JvColors.candidateHighlight, dp(11))
         }
+        isClickable = true
+        setOnClickListener {
+            InputFeedbackManager.keyPressVibrate(this)
+            onPick?.invoke(index)
+        }
+    }
 
     private fun rounded(
         color: Int,
@@ -93,9 +105,4 @@ class CandidateStripView(
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
-
-    companion object {
-        private const val TEXT = 0xFF111111.toInt()
-        private const val HIGHLIGHT = 0xFFE9E9E9.toInt()
-    }
 }

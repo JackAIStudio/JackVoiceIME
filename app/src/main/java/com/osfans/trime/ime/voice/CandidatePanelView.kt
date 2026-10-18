@@ -14,6 +14,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import com.osfans.trime.core.CandidateProto
 import com.osfans.trime.ime.keyboard.InputFeedbackManager
+import com.osfans.trime.ui.jackvoice.JvColors
 
 /**
  * 展开后的候选面板：盖住按键区，把整页候选摊成网格。
@@ -26,6 +27,8 @@ class CandidatePanelView(
     /** 参数是候选在**全量列表**里的下标。 */
     var onPick: ((Int) -> Unit)? = null
 
+    private var lastItems: Array<CandidateProto> = emptyArray()
+
     private val grid =
         LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -33,7 +36,7 @@ class CandidatePanelView(
         }
 
     init {
-        setBackgroundColor(BACKGROUND)
+        setBackgroundColor(JvColors.keyboardBg)
         isFillViewport = true
         overScrollMode = OVER_SCROLL_NEVER
         isVerticalScrollBarEnabled = false
@@ -41,6 +44,7 @@ class CandidatePanelView(
     }
 
     fun show(items: Array<CandidateProto>) {
+        lastItems = items
         grid.removeAllViews()
         var row: LinearLayout? = null
         items.forEachIndexed { index, candidate ->
@@ -69,33 +73,38 @@ class CandidatePanelView(
         scrollTo(0, 0)
     }
 
+    /** 外观模式变化后按当前色板重建一遍。 */
+    fun refreshColors() {
+        setBackgroundColor(JvColors.keyboardBg)
+        if (lastItems.isEmpty()) return
+        show(lastItems)
+    }
+
     fun clear() {
+        lastItems = emptyArray()
         grid.removeAllViews()
     }
 
     private fun cell(
         candidate: CandidateProto,
         index: Int,
-    ): TextView =
-        TextView(context).apply {
-            text = candidate.text
-            setTextColor(TEXT)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f)
-            gravity = Gravity.CENTER
-            maxLines = 1
-            isClickable = true
-            setOnClickListener {
-                InputFeedbackManager.keyPressVibrate(this)
-                onPick?.invoke(index)
-            }
+    ): TextView = TextView(context).apply {
+        text = candidate.text
+        setTextColor(JvColors.text)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f)
+        gravity = Gravity.CENTER
+        maxLines = 1
+        isClickable = true
+        setOnClickListener {
+            InputFeedbackManager.keyPressVibrate(this)
+            onPick?.invoke(index)
         }
+    }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     companion object {
         private const val PER_ROW = 3
         private const val ROW_HEIGHT_DP = 50
-        private const val BACKGROUND = 0xFFF1F1F1.toInt()
-        private const val TEXT = 0xFF111111.toInt()
     }
 }

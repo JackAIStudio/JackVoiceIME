@@ -90,6 +90,11 @@ class VoiceWindow(di: DI) :
         panel?.setLevel(0f)
     }
 
+    /** 外观模式或主题配色变了：面板里的自定义颜色当场重取，不重建视图。 */
+    override fun refreshColors() {
+        panel?.refreshColors()
+    }
+
     // ── VoiceSession 回调（会话保证在主线程）────────────────────────────
 
     override fun onVoiceStateChanged(state: VoiceState) {

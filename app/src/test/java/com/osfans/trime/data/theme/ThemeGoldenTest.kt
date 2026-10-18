@@ -110,19 +110,24 @@ class ThemeGoldenTest :
                     val style = theme.style
                     style.candidateTextSize shouldBe 22f
                     style.keyHeight shouldBe 44
-                    style.horizontalGap shouldBe 1
+                    style.horizontalGap shouldBe 7
                 }
 
                 Then("color schemes and preset keys are decoded") {
-                    theme.presetColorSchemes.size shouldBe 37
-                    theme.presetKeys.size shouldBe 106
+                    theme.presetColorSchemes.size shouldBe 38
+                    theme.presetKeys.size shouldBe 111
                     val brightnessDown = theme.presetKeys.getValue("BRIGHTNESS_DOWN")
                     brightnessDown.label shouldBe "亮度-"
                     brightnessDown.send shouldBe "BRIGHTNESS_DOWN"
                 }
 
-                Then("all 18 plain keyboards are decoded with their keys") {
-                    theme.presetKeyboards.size shouldBe 18
+                Then("the default scheme has a dark counterpart for the global dark mode") {
+                    theme.presetColorSchemes shouldContainKey "jv_dark"
+                    theme.presetColorSchemes.getValue("default")["dark_scheme"] shouldBe "jv_dark"
+                }
+
+                Then("all 19 plain keyboards are decoded with their keys") {
+                    theme.presetKeyboards.size shouldBe 19
                     theme.presetKeyboards shouldContainKey "default"
                     theme.presetKeyboards shouldContainKey "qwerty0"
                     theme.presetKeyboards shouldContainKey "cangjie5"

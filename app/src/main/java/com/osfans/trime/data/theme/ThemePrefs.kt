@@ -57,17 +57,12 @@ class ThemePrefs(
             }
         }
 
-    val followSystemDayNight =
-        switch(
-            R.string.follow_system_day_night_color,
-            FOLLOW_SYSTEM_DAY_NIGHT,
-            false,
-        )
+    // 「跟随系统夜间模式」不再单独设置：外观模式（自动/浅色/深色）是唯一开关，
+    // 键盘配色和主界面一起走 AppearanceManager。见 JACKVOICE.md。
 
     companion object {
         const val SELECTED_THEME = "selected_theme"
         const val NORMAL_MODE_COLOR = "normal_mode_color"
-        const val FOLLOW_SYSTEM_DAY_NIGHT = "follow_system_day_night"
         const val NAVBAR_BACKGROUND = "navbar_background"
     }
 }

@@ -14,7 +14,6 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.viewModels
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
-import androidx.appcompat.app.AppCompatDelegate
 import androidx.appcompat.graphics.drawable.DrawerArrowDrawable
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
@@ -33,7 +32,6 @@ import com.osfans.trime.BuildConfig
 import com.osfans.trime.R
 import com.osfans.trime.core.data.UserDataManager
 import com.osfans.trime.daemon.launchOnReady
-import com.osfans.trime.data.prefs.AppPrefs
 import com.osfans.trime.data.soundeffect.SoundEffectManager
 import com.osfans.trime.databinding.ActivityMainBinding
 import com.osfans.trime.ui.setup.SetupActivity
@@ -46,19 +44,10 @@ import splitties.views.topPadding
 class MainActivity : AppCompatActivity() {
     private val viewModel: MainViewModel by viewModels()
 
-    private val uiMode by AppPrefs.defaultInstance().advanced.uiMode
-
     private lateinit var navController: NavController
     private var testInputPanel: TestInputPanel? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        val uiMode =
-            when (uiMode) {
-                AppPrefs.Advanced.UiMode.AUTO -> AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM
-                AppPrefs.Advanced.UiMode.LIGHT -> AppCompatDelegate.MODE_NIGHT_NO
-                AppPrefs.Advanced.UiMode.DARK -> AppCompatDelegate.MODE_NIGHT_YES
-            }
-        AppCompatDelegate.setDefaultNightMode(uiMode)
         super.onCreate(savedInstanceState)
         if (SetupActivity.shouldShowUp()) {
             startActivity<SetupActivity>()

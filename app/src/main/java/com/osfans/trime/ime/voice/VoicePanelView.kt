@@ -7,7 +7,6 @@ package com.osfans.trime.ime.voice
 
 import android.content.Context
 import android.graphics.Canvas
-import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.RectF
 import android.text.TextUtils
@@ -20,6 +19,7 @@ import android.widget.TextView
 import com.osfans.trime.R
 import com.osfans.trime.ime.keyboard.GestureFrame
 import com.osfans.trime.ime.keyboard.InputFeedbackManager
+import com.osfans.trime.ui.jackvoice.JvColors
 import kotlin.math.abs
 import kotlin.math.exp
 import kotlin.math.min
@@ -61,14 +61,14 @@ class VoicePanelView(
 
     private val statusView =
         TextView(context).apply {
-            setTextColor(TEXT_SECONDARY)
+            setTextColor(JvColors.textSecondary)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
             gravity = Gravity.CENTER
         }
 
     private val hintView =
         TextView(context).apply {
-            setTextColor(TEXT_SECONDARY)
+            setTextColor(JvColors.textSecondary)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
             gravity = Gravity.CENTER
         }
@@ -81,7 +81,7 @@ class VoicePanelView(
      */
     private val previewView =
         TextView(context).apply {
-            setTextColor(TEXT_PRIMARY)
+            setTextColor(JvColors.text)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             gravity = Gravity.CENTER
             includeFontPadding = false
@@ -90,7 +90,7 @@ class VoicePanelView(
             ellipsize = TextUtils.TruncateAt.END
             setLineSpacing(dp(1).toFloat(), 1f)
             setPadding(dp(14), dp(5), dp(14), dp(5))
-            background = roundedDrawable(WHITE_KEY, dp(16))
+            background = roundedDrawable(JvColors.keyBg, dp(16))
             // 气泡跟着文字走，但最多占屏幕宽度减去两侧留白，不能顶到屏幕边。
             maxWidth = resources.displayMetrics.widthPixels - dp(80)
             visibility = GONE
@@ -112,11 +112,11 @@ class VoicePanelView(
     private val trackpadHint =
         TextView(context).apply {
             setText(R.string.keyboard_trackpad_hint)
-            setTextColor(Color.WHITE)
+            setTextColor(JvColors.trackpadHintText)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
             gravity = Gravity.CENTER
             setPadding(dp(16), 0, dp(16), 0)
-            background = roundedDrawable(0xCC161616.toInt(), dp(18))
+            background = roundedDrawable(JvColors.trackpadHintBg, dp(18))
             elevation = dp(6).toFloat()
             isClickable = false
             isFocusable = false
@@ -125,6 +125,11 @@ class VoicePanelView(
             visibility = GONE
             alpha = 0f
         }
+
+    /** 需要跟着外观模式重新取色的键（键面 + 文字），刷新时统一过一遍。 */
+    private val themedKeys = mutableListOf<Pair<View, TextView?>>()
+
+    private val globeGlyphs = mutableListOf<GlobeGlyphView>()
 
     private val actionKey = keyLabel("") { onActionTap?.invoke() }
 
@@ -142,7 +147,7 @@ class VoicePanelView(
         }
 
     init {
-        setBackgroundColor(BACKGROUND)
+        setBackgroundColor(JvColors.keyboardBg)
 
         addView(
             toolbar,
@@ -263,6 +268,24 @@ class VoicePanelView(
         actionKey.text = label
     }
 
+    /** 外观模式变化后重新取色，不重建视图；录音动画和当前状态都不受影响。 */
+    fun refreshColors() {
+        setBackgroundColor(JvColors.keyboardBg)
+        toolbar.refreshColors()
+        statusView.setTextColor(JvColors.textSecondary)
+        hintView.setTextColor(JvColors.textSecondary)
+        previewView.setTextColor(JvColors.text)
+        previewView.background = roundedDrawable(JvColors.keyBg, dp(16))
+        trackpadHint.setTextColor(JvColors.trackpadHintText)
+        trackpadHint.background = roundedDrawable(JvColors.trackpadHintBg, dp(18))
+        themedKeys.forEach { (key, label) ->
+            key.background = roundedDrawable(JvColors.keyBg, dp(KEY_CORNER_DP))
+            label?.setTextColor(JvColors.text)
+        }
+        globeGlyphs.forEach { it.refreshColors() }
+        orb.refreshColors()
+    }
+
     fun showMessage(message: String) {
         statusView.visibility = VISIBLE
         statusView.text = message
@@ -285,14 +308,15 @@ class VoicePanelView(
         text = label
         gravity = Gravity.CENTER
         includeFontPadding = false
-        setTextColor(TEXT_PRIMARY)
+        setTextColor(JvColors.text)
         setTextSize(TypedValue.COMPLEX_UNIT_SP, textSizeSp)
-        background = roundedDrawable(WHITE_KEY, dp(KEY_CORNER_DP))
+        background = roundedDrawable(JvColors.keyBg, dp(KEY_CORNER_DP))
         isClickable = true
         setOnClickListener {
             InputFeedbackManager.keyPressVibrate(this)
             onClick()
         }
+        themedKeys += this to this
     }
 
     /**
@@ -301,27 +325,33 @@ class VoicePanelView(
      * 轻点仍然按一次空格；长按后拖动走 [onSpaceSlide]，松手不再补空格。
      * [GestureFrame] 已经处理好长按延迟、步进和取消，这里只负责接回调。
      */
-    private fun spaceKey(onTap: () -> Unit): FrameLayout =
-        GestureFrame(context).apply {
-            background = roundedDrawable(WHITE_KEY, dp(KEY_CORNER_DP))
-            isClickable = true
-            isTrackpad = true
-            onClick = onTap
-            onSlide = { dx, dy, _, _ ->
-                if (dx != 0 || dy != 0) onSpaceSlide?.invoke(dx, dy)
+    private fun spaceKey(onTap: () -> Unit): FrameLayout {
+        val label =
+            TextView(context).apply {
+                text = "空格"
+                gravity = Gravity.CENTER
+                includeFontPadding = false
+                setTextColor(JvColors.text)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
             }
-            onTrackpadState = { active -> setTrackpadActive(active) }
-            addView(
-                TextView(context).apply {
-                    text = "空格"
-                    gravity = Gravity.CENTER
-                    includeFontPadding = false
-                    setTextColor(TEXT_PRIMARY)
-                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
-                },
-                LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT),
-            )
-        }
+        val key =
+            GestureFrame(context).apply {
+                background = roundedDrawable(JvColors.keyBg, dp(KEY_CORNER_DP))
+                isClickable = true
+                isTrackpad = true
+                onClick = onTap
+                onSlide = { dx, dy, _, _ ->
+                    if (dx != 0 || dy != 0) onSpaceSlide?.invoke(dx, dy)
+                }
+                onTrackpadState = { active -> setTrackpadActive(active) }
+                addView(
+                    label,
+                    LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT),
+                )
+            }
+        themedKeys += key to label
+        return key
+    }
 
     /** 长按空格：底栏淡出，浮出「移动光标」。和打字键盘的触控板提示一致。 */
     private fun setTrackpadActive(active: Boolean) {
@@ -367,35 +397,49 @@ class VoicePanelView(
     private fun repeatKey(
         glyph: String,
         onRepeat: () -> Unit,
-    ): FrameLayout = GestureFrame(context).apply {
-        background = roundedDrawable(WHITE_KEY, dp(KEY_CORNER_DP))
-        isClickable = true
-        isRepeatable = true
-        onClick = onRepeat
-        addView(
+    ): FrameLayout {
+        val label =
             TextView(context).apply {
                 text = glyph
                 gravity = Gravity.CENTER
                 includeFontPadding = false
-                setTextColor(TEXT_PRIMARY)
+                setTextColor(JvColors.text)
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
-            },
-            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT),
-        )
+            }
+        val key =
+            GestureFrame(context).apply {
+                background = roundedDrawable(JvColors.keyBg, dp(KEY_CORNER_DP))
+                isClickable = true
+                isRepeatable = true
+                onClick = onRepeat
+                addView(
+                    label,
+                    LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT),
+                )
+            }
+        themedKeys += key to label
+        return key
     }
 
     /** 左下角那颗「切换输入法」：用画的地球，避免 emoji 字体的色块。回调同上，点击时才读。 */
-    private fun globeKey(onClick: () -> Unit): FrameLayout = FrameLayout(context).apply {
-        background = roundedDrawable(WHITE_KEY, dp(KEY_CORNER_DP))
-        isClickable = true
-        setOnClickListener {
-            InputFeedbackManager.keyPressVibrate(this)
-            onClick()
-        }
-        addView(
-            GlobeGlyphView(context),
-            LayoutParams(dp(20), dp(20)).apply { gravity = Gravity.CENTER },
-        )
+    private fun globeKey(onClick: () -> Unit): FrameLayout {
+        val glyph = GlobeGlyphView(context)
+        val key =
+            FrameLayout(context).apply {
+                background = roundedDrawable(JvColors.keyBg, dp(KEY_CORNER_DP))
+                isClickable = true
+                setOnClickListener {
+                    InputFeedbackManager.keyPressVibrate(this)
+                    onClick()
+                }
+                addView(
+                    glyph,
+                    LayoutParams(dp(20), dp(20)).apply { gravity = Gravity.CENTER },
+                )
+            }
+        globeGlyphs += glyph
+        themedKeys += key to null
+        return key
     }
 
     private fun roundedDrawable(
@@ -515,11 +559,6 @@ class VoicePanelView(
         private const val KEY_GAP_Y_DP = 6f
         private const val KEY_CORNER_DP = 13
         private const val BOTTOM_SAFE_DP = 20
-
-        private const val BACKGROUND = 0xFFF1F1F1.toInt()
-        private const val WHITE_KEY = 0xFFFFFFFF.toInt()
-        private const val TEXT_PRIMARY = 0xFF111111.toInt()
-        private const val TEXT_SECONDARY = 0xFF8A8A8A.toInt()
     }
 }
 
@@ -562,34 +601,44 @@ class VoiceOrbView(
     private val fill =
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL
-            color = ORB
+            color = JvColors.orbBg
         }
 
     private val white =
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL
-            color = Color.WHITE
+            color = JvColors.orbFg
         }
 
     private val halo =
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL
-            color = HALO
+            color = JvColors.orbHalo
         }
 
     private val stroke =
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
-            color = Color.WHITE
+            color = JvColors.orbFg
             strokeCap = Paint.Cap.ROUND
             strokeJoin = Paint.Join.ROUND
         }
 
     private val textPaint =
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
+            color = JvColors.thinkingText
             textAlign = Paint.Align.CENTER
         }
+
+    /** 外观模式变化后重新取色；正在录音的波形按新底色继续画。 */
+    fun refreshColors() {
+        fill.color = JvColors.orbBg
+        white.color = JvColors.orbFg
+        halo.color = JvColors.orbHalo
+        stroke.color = JvColors.orbFg
+        textPaint.color = JvColors.thinkingText
+        invalidate()
+    }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
@@ -616,7 +665,7 @@ class VoiceOrbView(
         val w = dp(wDp)
         val h = dp(hDp)
         val rect = RectF(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
-        fill.color = if (withMic) ORB else THINKING_BG
+        fill.color = if (withMic) JvColors.orbBg else JvColors.thinkingBg
         canvas.drawRoundRect(rect, h / 2, h / 2, fill)
 
         if (withMic) {
@@ -629,7 +678,7 @@ class VoiceOrbView(
         val sx = rect.left - sweep + (w + sweep) * t
         canvas.save()
         canvas.clipRect(sx, rect.top, sx + sweep, rect.bottom)
-        white.color = THINKING_PROGRESS
+        white.color = JvColors.thinkingProgress
         canvas.drawRoundRect(rect, h / 2, h / 2, white)
         canvas.restore()
         textPaint.textSize = h * 0.30f
@@ -653,7 +702,7 @@ class VoiceOrbView(
         val bodyW = s * 0.52f
         val bodyH = s * 0.65f
         val top = cy - s * 0.465f
-        white.color = Color.WHITE
+        white.color = JvColors.orbFg
         canvas.drawRoundRect(
             RectF(cx - bodyW / 2, top, cx + bodyW / 2, top + bodyH),
             bodyW / 2,
@@ -662,6 +711,7 @@ class VoiceOrbView(
         )
         val r = s * 0.40f
         val cradleCy = top + s * 0.43f
+        stroke.color = JvColors.orbFg
         stroke.strokeWidth = s * 0.12f
         canvas.drawArc(
             RectF(cx - r, cradleCy - r, cx + r, cradleCy + r),
@@ -696,7 +746,7 @@ class VoiceOrbView(
         // 开方只影响观感：正常说话也明显能顶起来，静音仍然是 0。
         val visual = sqrt(displayedLevel)
         canvas.drawCircle(cx, cy, dp(CIRCLE_R + HALO_GAP) + dp(3f) * visual, halo)
-        fill.color = ORB
+        fill.color = JvColors.orbBg
         canvas.drawCircle(cx, cy, r, fill)
 
         val t = (System.currentTimeMillis() - startAt) / 1000f
@@ -704,6 +754,7 @@ class VoiceOrbView(
         val maxH = dp(64f)
         val minH = dp(5f)
         val weights = floatArrayOf(0.42f, 0.72f, 1f, 0.66f, 0.38f)
+        white.color = JvColors.orbFg
         white.strokeWidth = dp(7f)
         white.strokeCap = Paint.Cap.ROUND
         for (i in weights.indices) {
@@ -731,11 +782,6 @@ class VoiceOrbView(
         /** 音量的起落速度（每秒逼近比例）。起得快才跟得上说话，落得慢一点不闪。 */
         private const val ATTACK_PER_SEC = 22f
         private const val RELEASE_PER_SEC = 5f
-
-        private const val ORB = 0xFF111111.toInt()
-        private const val HALO = 0xFFE8E8E8.toInt()
-        private const val THINKING_BG = 0xFF2E2E2E.toInt()
-        private const val THINKING_PROGRESS = 0xFF5C5C5C.toInt()
     }
 }
 
@@ -746,12 +792,18 @@ class GlobeGlyphView(
     private val paint =
         Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE
-            color = 0xFF3A3A3A.toInt()
+            color = JvColors.glyph
             strokeCap = Paint.Cap.ROUND
         }
 
+    fun refreshColors() {
+        paint.color = JvColors.glyph
+        invalidate()
+    }
+
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        paint.color = JvColors.glyph
         val cx = width / 2f
         val cy = height / 2f
         val r = minOf(width, height) / 2f - paint.strokeWidth

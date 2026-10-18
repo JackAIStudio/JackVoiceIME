@@ -19,10 +19,10 @@ import androidx.collection.LruCache
 import androidx.core.graphics.drawable.toDrawable
 import androidx.core.math.MathUtils
 import com.osfans.trime.core.data.DataManager
+import com.osfans.trime.data.prefs.AppearanceManager
 import com.osfans.trime.util.ColorUtils
 import com.osfans.trime.util.NinePatchBitmapFactory
 import com.osfans.trime.util.WeakHashSet
-import com.osfans.trime.util.isNightMode
 
 /**
  * Global entry point for the colors and drawables of the active theme.
@@ -73,7 +73,9 @@ object ColorManager {
     }
 
     fun init(configuration: Configuration) {
-        isNightMode = configuration.isNightMode()
+        // 外观模式（自动/浅色/深色）才是唯一开关：显式选了深色时，
+        // 即便系统是浅色也要用深色配色。
+        isNightMode = AppearanceManager.isNight(configuration)
         activateScheme(notify = false)
 
         val maxMemory = Runtime.getRuntime().maxMemory() / 1024
@@ -120,7 +122,9 @@ object ColorManager {
     private fun resolveActiveScheme(theme: Theme): ColorScheme = ColorSchemeResolver.resolve(
         schemes = theme.presetColorSchemes,
         selectedSchemeId = prefs.normalModeColor.getValue(),
-        followSystemDayNight = prefs.followSystemDayNight.getValue(),
+        // 颜色方案始终按生效的深浅色来选：主题里写了 dark_scheme 就用它的深色版，
+        // 显式选择了浅色/深色时也一样。
+        followSystemDayNight = true,
         isNightMode = isNightMode,
     )
 

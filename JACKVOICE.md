@@ -80,6 +80,23 @@ q w e r t y u i o p        ← 按键
 | `Rime.kt` 的 `inlinePreeditMode` | 强制 `COMPOSING_TEXT`：拼音字母直接进输入框；预编辑里的 `‸`(U+2038) 光标标记必须剥掉，不然会被当正文写进输入框 |
 | 主题 `CommitAction` 键 | 底行动作键。组合中先选高亮候选上屏，commit 到了再执行宿主 `imeOptions` 动作——**直接发 Return 会把原始拼音上屏** |
 
+## 外观与深色模式
+
+设置页第一个分组是「外观」：**自动 / 浅色 / 深色**，默认自动跟随系统。
+它只写一个偏好 `ui_mode`（`AppPrefs.Advanced.UiMode`），由
+`AppearanceManager` 统一分发，别在别处再读系统 `uiMode` 自己判断：
+
+| 层 | 怎么跟 | 切换时 |
+|---|---|---|
+| 主界面 / 原生设置 | `AppCompatDelegate.setDefaultNightMode`（DayNight 主题 + `values-night`） | Activity 自己重建；JackVoice 用 `onSaveInstanceState` 保住当前 Tab |
+| 键盘主题 | `ColorManager` 用生效的深浅色做 `ColorSchemeResolver`；`trime.yaml` 的 `default` 声明 `dark_scheme: jv_dark` | `ColorManager` 发变更，`InputView.refreshColors()` 原地重绘 |
+| 语音面板 / 顶栏 / 候选 / 拼写气泡 | `JvColors` 按生效模式返回两套色值 | `AppearanceManager` 通知输入法服务，调 `refreshColors()`，不重建视图 |
+
+- 不再有独立的「跟随系统夜间模式」主题开关：外观模式是唯一开关。
+- 系统深浅色变化只在「自动」时生效；显式浅色/深色不受系统影响。
+- `JvColors` 的深色键面刻意对齐 `trime.yaml` 的 `jv_dark`：
+  键盘底 `#1C1C1E`、键面 `#2C2C2E`、主文字 `#F5F5F7`，语音面板和拼音键盘切过去不会一深一浅。
+
 ## 语音链路
 
 ```

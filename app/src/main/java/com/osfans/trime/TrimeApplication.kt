@@ -14,6 +14,7 @@ import android.content.res.Configuration
 import android.os.Build
 import android.os.Process
 import android.util.Log
+import androidx.annotation.Keep
 import androidx.core.content.ContextCompat
 import androidx.core.content.edit
 import androidx.preference.PreferenceManager
@@ -21,11 +22,11 @@ import com.osfans.trime.daemon.RimeDaemon
 import com.osfans.trime.data.db.ClipboardHelper
 import com.osfans.trime.data.db.CollectionHelper
 import com.osfans.trime.data.prefs.AppPrefs
+import com.osfans.trime.data.prefs.AppearanceManager
 import com.osfans.trime.data.theme.ColorManager
 import com.osfans.trime.data.theme.ThemeManager
 import com.osfans.trime.receiver.RimeIntentReceiver
 import com.osfans.trime.ui.main.LogActivity
-import com.osfans.trime.util.isNightMode
 import com.osfans.trime.worker.BackgroundSyncWork
 import kotlinx.coroutines.CoroutineName
 import kotlinx.coroutines.MainScope
@@ -46,6 +47,18 @@ class TrimeApplication : Application() {
     val coroutineScope = MainScope() + CoroutineName("TrimeApplication")
 
     private val rimeIntentReceiver = RimeIntentReceiver()
+
+    /**
+     * 外观模式变化（设置里切换，或「自动」时系统深浅色变了）后，
+     * 让 Rime 主题切到对应的深/浅配色。`AppearanceManager` 里的监听器是弱引用，
+     * 必须由 Application 强引用住。
+     */
+    @Keep
+    private val onAppearanceChangeListener =
+        AppearanceManager.OnChangeListener { night ->
+            runCatching { ColorManager.onSystemNightModeChange(night) }
+                .onFailure { Timber.w(it, "Failed to apply appearance to the theme") }
+        }
 
     private val unlockReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -173,6 +186,13 @@ class TrimeApplication : Application() {
             Timber.d("isDirectBootMode=$isDirectBootMode")
 
             val appPrefs = AppPrefs.initDefault(sharedPreferences)
+            // 外观模式要在任何 Activity 起来之前定下来：AppCompat 的 DayNight 和
+            // 输入法自己的配色都从这里取。默认「自动」，跟随系统。外观出问题不该
+            // 把后面的 Rime 初始化一起带走，所以单独兜一层。
+            runCatching {
+                AppearanceManager.init(this)
+                AppearanceManager.addOnChangedListener(onAppearanceChangeListener)
+            }.onFailure { Timber.w(it, "Failed to initialize appearance mode") }
             // JackVoice：键盘震动改成默认开。老安装里这个键可能已经被 Trime 的老默认值写成 false，
             // 这里做一次性迁移；之后用户自己在设置里关掉就不会再被覆盖。
             if (!sharedPreferences.getBoolean(HAPTICS_MIGRATION_KEY, false)) {
@@ -204,7 +224,9 @@ class TrimeApplication : Application() {
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         try {
-            ColorManager.onSystemNightModeChange(newConfig.isNightMode())
+            // 「自动」模式下系统深浅色变了，才需要通知主题和输入法重绘；
+            // 显式选了浅色/深色就保持原样。
+            AppearanceManager.onConfigurationChanged(newConfig)
         } catch (e: Exception) {
             Timber.w(e, "Something wrong on configuration changed")
         }

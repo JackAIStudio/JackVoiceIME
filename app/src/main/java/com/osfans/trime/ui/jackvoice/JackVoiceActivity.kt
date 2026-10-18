@@ -25,11 +25,14 @@ import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updatePadding
 import androidx.lifecycle.lifecycleScope
 import com.osfans.trime.BuildConfig
 import com.osfans.trime.R
+import com.osfans.trime.data.prefs.AppPrefs
+import com.osfans.trime.data.prefs.AppearanceManager
 import com.osfans.trime.ime.voice.GlossarySyncClient
 import com.osfans.trime.ime.voice.GlossarySyncManager
 import com.osfans.trime.ime.voice.HotwordTableSync
@@ -57,7 +60,9 @@ import java.util.Locale
  *
  * Trime 自己的 Rime 设置保留在「设置 → 输入法高级设置」里，没有被替换掉。
  */
-class JackVoiceActivity : AppCompatActivity(), GlossarySyncManager.Listener {
+class JackVoiceActivity :
+    AppCompatActivity(),
+    GlossarySyncManager.Listener {
     private enum class Tab(
         val label: String,
         val icon: Int,
@@ -77,9 +82,28 @@ class JackVoiceActivity : AppCompatActivity(), GlossarySyncManager.Listener {
     private var currentTab = Tab.Home
     private var syncTicker: Job? = null
 
+    private companion object {
+        const val STATE_TAB = "jackvoice_tab"
+        const val STATE_DICTIONARY_TAB = "jackvoice_dictionary_tab"
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        // 外观模式可能刚在设置里改过；系统栏图标要跟当前底色反着来，
+        // 否则浅色下是白字、深色下是黑字，顶部那一条会看不见。
+        applySystemBarAppearance()
+
+        currentTab =
+            savedInstanceState
+                ?.getInt(STATE_TAB, Tab.Home.ordinal)
+                ?.let { Tab.entries.getOrNull(it) }
+                ?: Tab.Home
+        dictionaryTab =
+            savedInstanceState
+                ?.getInt(STATE_DICTIONARY_TAB, DictionaryTab.Hotwords.ordinal)
+                ?.let { DictionaryTab.entries.getOrNull(it) }
+                ?: DictionaryTab.Hotwords
 
         val root =
             LinearLayout(this).apply {
@@ -112,7 +136,13 @@ class JackVoiceActivity : AppCompatActivity(), GlossarySyncManager.Listener {
 
         setContentView(root)
         GlossarySyncManager.addListener(this)
-        select(Tab.Home)
+        select(currentTab)
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        outState.putInt(STATE_TAB, currentTab.ordinal)
+        outState.putInt(STATE_DICTIONARY_TAB, dictionaryTab.ordinal)
+        super.onSaveInstanceState(outState)
     }
 
     override fun onResume() {
@@ -136,6 +166,14 @@ class JackVoiceActivity : AppCompatActivity(), GlossarySyncManager.Listener {
     override fun onDestroy() {
         GlossarySyncManager.removeListener(this)
         super.onDestroy()
+    }
+
+    private fun applySystemBarAppearance() {
+        val light = !AppearanceManager.isNight()
+        WindowCompat.getInsetsController(window, window.decorView).run {
+            isAppearanceLightStatusBars = light
+            isAppearanceLightNavigationBars = light
+        }
     }
 
     override fun onGlossarySync(report: GlossarySyncManager.Report) {
@@ -261,8 +299,7 @@ class JackVoiceActivity : AppCompatActivity(), GlossarySyncManager.Listener {
         return Jv.page(col)
     }
 
-    private fun weight() =
-        LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+    private fun weight() = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
 
     /** 首页顶部那张「键盘状态」卡，替代 Typeless 的桌面端推广位。 */
     private fun heroCard(): View {
@@ -315,22 +352,19 @@ class JackVoiceActivity : AppCompatActivity(), GlossarySyncManager.Listener {
      * 注意：targetSdk 34 起读 `Settings.Secure.ENABLED_INPUT_METHODS` 会抛 SecurityException，
      * 必须走 InputMethodManager 的正式 API。
      */
-    private fun isImeEnabled(): Boolean =
-        runCatching {
-            getSystemService(android.view.inputmethod.InputMethodManager::class.java)
-                ?.enabledInputMethodList
-                ?.any { it.packageName == packageName } == true
-        }.getOrDefault(false)
+    private fun isImeEnabled(): Boolean = runCatching {
+        getSystemService(android.view.inputmethod.InputMethodManager::class.java)
+            ?.enabledInputMethodList
+            ?.any { it.packageName == packageName } == true
+    }.getOrDefault(false)
 
-    private fun isImeDefault(): Boolean =
-        runCatching {
-            Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
-                ?.startsWith(packageName) == true
-        }.getOrDefault(false)
+    private fun isImeDefault(): Boolean = runCatching {
+        Settings.Secure.getString(contentResolver, Settings.Secure.DEFAULT_INPUT_METHOD)
+            ?.startsWith(packageName) == true
+    }.getOrDefault(false)
 
-    private fun hasMic(): Boolean =
-        checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
-            android.content.pm.PackageManager.PERMISSION_GRANTED
+    private fun hasMic(): Boolean = checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) ==
+        android.content.pm.PackageManager.PERMISSION_GRANTED
 
     // ── 历史记录 ────────────────────────────────────────────────────────
 
@@ -416,15 +450,13 @@ class JackVoiceActivity : AppCompatActivity(), GlossarySyncManager.Listener {
         label: String,
         color: Int = Jv.TEXT2,
         onClick: () -> Unit,
-    ): TextView =
-        Jv.text(this, label, 14f, color).apply {
-            setPadding(Jv.dp(this@JackVoiceActivity, 10), Jv.dp(this@JackVoiceActivity, 6), Jv.dp(this@JackVoiceActivity, 10), Jv.dp(this@JackVoiceActivity, 6))
-            isClickable = true
-            setOnClickListener { onClick() }
-        }
+    ): TextView = Jv.text(this, label, 14f, color).apply {
+        setPadding(Jv.dp(this@JackVoiceActivity, 10), Jv.dp(this@JackVoiceActivity, 6), Jv.dp(this@JackVoiceActivity, 10), Jv.dp(this@JackVoiceActivity, 6))
+        isClickable = true
+        setOnClickListener { onClick() }
+    }
 
-    private fun toast(msg: String) =
-        android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show()
+    private fun toast(msg: String) = android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show()
 
     /**
      * 热词改动后同步整张云端热词表；没配置表 ID 时只保存在本地。
@@ -441,6 +473,7 @@ class JackVoiceActivity : AppCompatActivity(), GlossarySyncManager.Listener {
                             Timber.i("热词表同步成功：${outcome.count} 条")
                             if (manual) toast("已同步 ${outcome.count} 条热词到云端")
                         }
+
                         is HotwordTableSync.Outcome.Skipped -> if (manual) toast(outcome.reason)
                     }
                 }.onFailure {
@@ -687,7 +720,7 @@ class JackVoiceActivity : AppCompatActivity(), GlossarySyncManager.Listener {
     ): TextView = Jv.text(this, label, 14f, if (active) Jv.TEXT else Jv.TEXT2, bold = active).apply {
         gravity = Gravity.CENTER
         setPadding(0, Jv.dp(this@JackVoiceActivity, 8), 0, Jv.dp(this@JackVoiceActivity, 8))
-        if (active) background = Jv.round(0xFFFFFFFF.toInt(), Jv.dp(this@JackVoiceActivity, 9))
+        if (active) background = Jv.round(Jv.SEGMENT, Jv.dp(this@JackVoiceActivity, 9))
         isClickable = true
         setOnClickListener { onClick() }
     }
@@ -744,7 +777,9 @@ class JackVoiceActivity : AppCompatActivity(), GlossarySyncManager.Listener {
             when {
                 lastOne && hasTable ->
                     "这是最后一条热词；火山热词表不接受空文件，云端旧表不会被清空。手机和 Mac 的词库会自动同步。"
+
                 hasTable -> "火山识别热词表会一起更新，手机和 Mac 的词库会自动同步。"
+
                 else -> "手机和 Mac 的词库会自动同步。"
             }
         AlertDialog
@@ -886,6 +921,19 @@ class JackVoiceActivity : AppCompatActivity(), GlossarySyncManager.Listener {
     private fun settingsPage(): View {
         val col = Jv.column(this)
         col.addView(Jv.pageTitle(this, "设置"))
+
+        col.addView(Jv.sectionLabel(this, "外观"))
+        val appearance = Jv.card(this)
+        appearance.addView(
+            Jv.row(
+                this,
+                "深色模式",
+                "跟随系统，或固定浅色 / 深色",
+                trailing = appearanceLabel(),
+                chevron = true,
+            ) { showAppearanceDialog() },
+        )
+        col.addView(appearance)
 
         col.addView(Jv.sectionLabel(this, "词库云同步"))
         val cloud = Jv.card(this)
@@ -1064,6 +1112,30 @@ class JackVoiceActivity : AppCompatActivity(), GlossarySyncManager.Listener {
         col.addView(about)
 
         return Jv.page(col)
+    }
+
+    private fun appearanceLabel(): String = when (AppearanceManager.mode()) {
+        AppPrefs.Advanced.UiMode.AUTO -> "自动"
+        AppPrefs.Advanced.UiMode.LIGHT -> "浅色"
+        AppPrefs.Advanced.UiMode.DARK -> "深色"
+    }
+
+    /**
+     * 外观只写一个偏好（`ui_mode`），由 [AppearanceManager] 同时驱动
+     * AppCompat 的 DayNight 和输入法自己的配色。改完 AppCompat 会重建 Activity，
+     * 当前 Tab 由 onSaveInstanceState 带过去。
+     */
+    private fun showAppearanceDialog() {
+        val modes = AppPrefs.Advanced.UiMode.entries
+        val labels = arrayOf("自动（跟随系统）", "浅色", "深色")
+        AlertDialog
+            .Builder(this)
+            .setTitle("外观")
+            .setSingleChoiceItems(labels, modes.indexOf(AppearanceManager.mode())) { dialog, which ->
+                dialog.dismiss()
+                AppPrefs.defaultInstance().advanced.uiMode.setValue(modes[which])
+            }.setNegativeButton(android.R.string.cancel, null)
+            .show()
     }
 
     private fun maskKey(key: String): String = if (key.length <= 8) "已填写" else key.take(4) + "…" + key.takeLast(4)

@@ -4,7 +4,6 @@
 
 package com.osfans.trime.ime.keyboard
 
-import android.graphics.Color
 import android.graphics.Point
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
@@ -43,6 +42,7 @@ import com.osfans.trime.ime.voice.VoiceWindow
 import com.osfans.trime.ime.window.BoardWindow
 import com.osfans.trime.ime.window.BoardWindowManager
 import com.osfans.trime.ime.window.ResidentWindow
+import com.osfans.trime.ui.jackvoice.JvColors
 import com.osfans.trime.util.isLandscape
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -247,14 +247,14 @@ class KeyboardWindow(di: DI) :
         trackpadHint =
             TextView(context).apply {
                 setText(R.string.keyboard_trackpad_hint)
-                setTextColor(Color.WHITE)
+                setTextColor(JvColors.trackpadHintText)
                 textSize = 13f
                 gravity = Gravity.CENTER
                 setPadding(context.dp(16), 0, context.dp(16), 0)
                 background =
                     GradientDrawable().apply {
                         cornerRadius = context.dp(18).toFloat()
-                        setColor(0xCC161616.toInt())
+                        setColor(JvColors.trackpadHintBg)
                     }
                 elevation = context.dp(6).toFloat()
                 isClickable = false
@@ -528,6 +528,16 @@ class KeyboardWindow(di: DI) :
     /** Repaints the keyboard after a color-scheme switch; keys re-resolve their colors. */
     override fun refreshColors() {
         currentKeyboardView?.invalidateAllKeys()
+        if (::toolbar.isInitialized) toolbar.refreshColors()
+        if (::candidatePanel.isInitialized) candidatePanel.refreshColors()
+        if (::trackpadHint.isInitialized) {
+            trackpadHint.setTextColor(JvColors.trackpadHintText)
+            trackpadHint.background =
+                GradientDrawable().apply {
+                    cornerRadius = context.dp(18).toFloat()
+                    setColor(JvColors.trackpadHintBg)
+                }
+        }
     }
 
     override fun onStartInput(info: EditorInfo) {

@@ -12,6 +12,7 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.widget.FrameLayout
 import android.widget.TextView
+import com.osfans.trime.ui.jackvoice.JvColors
 
 /**
  * 拼写气泡：正在拼的拼音贴在键盘上沿**左上角**，只占文字那么大。
@@ -34,7 +35,7 @@ class ComposingBarView(
 ) : FrameLayout(context) {
     private val label =
         TextView(context).apply {
-            setTextColor(TEXT)
+            setTextColor(JvColors.text)
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
             gravity = Gravity.CENTER_VERTICAL
             setSingleLine(true)
@@ -44,17 +45,27 @@ class ComposingBarView(
 
     init {
         setPadding(dp(16), 0, dp(16), 0)
-        background =
-            GradientDrawable().apply {
-                shape = GradientDrawable.RECTANGLE
-                setColor(BACKGROUND)
-                val r = dp(16).toFloat()
-                cornerRadii = floatArrayOf(r, r, r, r, 0f, 0f, 0f, 0f)
-            }
+        applyBackground()
         addView(
             label,
             LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT),
         )
+    }
+
+    /** 外观模式变化后重新取色；气泡内容不动。 */
+    fun refreshColors() {
+        label.setTextColor(JvColors.text)
+        applyBackground()
+    }
+
+    private fun applyBackground() {
+        background =
+            GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                setColor(JvColors.composingBubble)
+                val r = dp(16).toFloat()
+                cornerRadii = floatArrayOf(r, r, r, r, 0f, 0f, 0f, 0f)
+            }
     }
 
     override fun onMeasure(
@@ -80,8 +91,5 @@ class ComposingBarView(
 
         /** 气泡最多占屏宽的比例，剩下的部分留给 App 内容透出来。 */
         private const val MAX_WIDTH_RATIO = 0.6f
-
-        private const val BACKGROUND = 0xD9F1F1F1.toInt()
-        private const val TEXT = 0xFF111111.toInt()
     }
 }

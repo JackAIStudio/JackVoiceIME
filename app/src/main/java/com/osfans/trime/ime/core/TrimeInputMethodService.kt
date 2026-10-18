@@ -42,6 +42,7 @@ import com.osfans.trime.core.RimeMessage
 import com.osfans.trime.daemon.RimeDaemon
 import com.osfans.trime.daemon.RimeSession
 import com.osfans.trime.data.prefs.AppPrefs
+import com.osfans.trime.data.prefs.AppearanceManager
 import com.osfans.trime.data.prefs.PreferenceDelegate
 import com.osfans.trime.data.prefs.PreferenceDelegateProvider
 import com.osfans.trime.data.theme.ColorManager
@@ -175,6 +176,24 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
             }
         }
 
+    /**
+     * 外观模式变化时，Rime 主题会自己切配色（由 Application 监听并调用 ColorManager），
+     * 但 JackVoice 手搭的语音面板 / 顶栏 / 候选 / 拼写气泡不归 ColorManager 管，
+     * 这里补一次重绘，键盘开着时切深色能立刻看到。
+     */
+    @Keep
+    private val onAppearanceChangeListener =
+        AppearanceManager.OnChangeListener {
+            ContextCompat.getMainExecutor(this).execute {
+                val scope = themeScope ?: return@execute
+                inputView?.refreshColors()
+                candidatesView?.refreshColors()
+                window.window?.let {
+                    navBarManager.evaluate(it, inputDeviceManager.useVirtualKeyboard, scope.colors)
+                }
+            }
+        }
+
     private fun postJob(
         scope: CoroutineScope,
         block: suspend () -> Unit,
@@ -235,6 +254,7 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
                 ThemeManager.init(resources.configuration)
                 ThemeManager.addOnChangedListener(onThemeChangeListener)
                 ColorManager.addOnChangedListener(onColorChangeListener)
+                AppearanceManager.addOnChangedListener(onAppearanceChangeListener)
             }
         }
         InputFeedbackManager.init(this)
@@ -382,6 +402,7 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
         prefs.candidates.unregisterOnChangeListener(recreateCandidatesViewListener)
         ThemeManager.removeOnChangedListener(onThemeChangeListener)
         ColorManager.removeOnChangedListener(onColorChangeListener)
+        AppearanceManager.removeOnChangedListener(onAppearanceChangeListener)
         super.onDestroy()
         unregisterReceiver(rimeIntentReceiver)
         RimeDaemon.destroySession(javaClass.name)
