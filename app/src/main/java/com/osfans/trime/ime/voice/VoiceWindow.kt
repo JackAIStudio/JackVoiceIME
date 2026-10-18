@@ -52,6 +52,8 @@ class VoiceWindow(di: DI) :
         view.onOrbTap = { onOrbTap() }
         // 左下角换成「切换输入法」：初期还要用别的输入法打字
         view.onImeSwitchTap = { showImePicker() }
+        view.onSpaceTap = { service.commitText(" ") }
+        view.onSpaceSlide = { dx, dy -> service.moveCursorBy(dx, dy) }
         view.onBackspaceTap = { service.sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL) }
         view.onAtTap = { service.commitText("@") }
         view.onActionTap = { performEditorAction() }

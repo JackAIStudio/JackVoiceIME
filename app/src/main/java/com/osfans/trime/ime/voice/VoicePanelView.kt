@@ -14,9 +14,10 @@ import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
+import android.view.ViewGroup
 import android.widget.FrameLayout
-import android.widget.LinearLayout
 import android.widget.TextView
+import com.osfans.trime.R
 import com.osfans.trime.ime.keyboard.GestureFrame
 import com.osfans.trime.ime.keyboard.InputFeedbackManager
 import kotlin.math.abs
@@ -32,7 +33,8 @@ import kotlin.math.sqrt
  *   中间那颗大按钮      中心 159dp（空闲胶囊 148×56 / 录音圆直径 123、光晕 150）
  *   流式预览气泡        顶端 242dp、最多两行（只在录音/处理时出现）
  *   「再次点击以完成」   顶端 294dp（只在录音且还没有预览时出现）
- *   底部工具栏          左圆 x=45dp、右圆距右 42dp（⌫ 在 @ 上方 61dp）、中间胶囊 112×46
+ *   底部键区            与拼音/EN 共用四行网格：地球 / 空格 / 动作键（15% / 70% / 15%），
+ *                       动作键上方一格是 ⌫，再上一格是 @；键面内缩 3.5×6dp、圆角 13dp
  *
  * 录音与处理态**整条底栏收起**——和 Typeless 一样，录音时画面只剩那颗大圆。
  */
@@ -43,6 +45,8 @@ class VoicePanelView(
 
     /** 左下角：弹出系统输入法选择器（初期还要用别的输入法打字）。 */
     var onImeSwitchTap: (() -> Unit)? = null
+    var onSpaceTap: (() -> Unit)? = null
+    var onSpaceSlide: ((dx: Int, dy: Int) -> Unit)? = null
     var onBackspaceTap: (() -> Unit)? = null
     var onAtTap: (() -> Unit)? = null
     var onActionTap: (() -> Unit)? = null
@@ -101,41 +105,40 @@ class VoicePanelView(
             }
         }
 
-    private val actionKey = pillKey("") { onActionTap?.invoke() }
+    /**
+     * 空格长按进入触控板时的提示。和打字键盘的提示同一套外观，
+     * 不接收触摸，拖动事件仍由空格键的 [GestureFrame] 处理。
+     */
+    private val trackpadHint =
+        TextView(context).apply {
+            setText(R.string.keyboard_trackpad_hint)
+            setTextColor(Color.WHITE)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            gravity = Gravity.CENTER
+            setPadding(dp(16), 0, dp(16), 0)
+            background = roundedDrawable(0xCC161616.toInt(), dp(18))
+            elevation = dp(6).toFloat()
+            isClickable = false
+            isFocusable = false
+            isLongClickable = false
+            isSoundEffectsEnabled = false
+            visibility = GONE
+            alpha = 0f
+        }
 
+    private val actionKey = keyLabel("") { onActionTap?.invoke() }
+
+    /**
+     * 底行与打字键盘同一套坐标：地球在 123 的位置、空格在中缝、动作键在右下角，
+     * ⌫ 和 @ 顺着右列往上排。切到拼音/EN 时右下角那颗键不跳位置。
+     */
     private val bottomBar =
-        FrameLayout(context).apply {
-            addView(
-                globeKey { onImeSwitchTap?.invoke() },
-                LayoutParams(dp(48), dp(48)).apply {
-                    gravity = Gravity.BOTTOM or Gravity.START
-                    marginStart = dp(22)
-                    bottomMargin = dp(16)
-                },
-            )
-            addView(
-                actionKey,
-                LayoutParams(dp(112), dp(46)).apply {
-                    gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-                    bottomMargin = dp(17)
-                },
-            )
-            addView(
-                circleKey("@", GRAY_KEY) { onAtTap?.invoke() },
-                LayoutParams(dp(48), dp(48)).apply {
-                    gravity = Gravity.BOTTOM or Gravity.END
-                    marginEnd = dp(18)
-                    bottomMargin = dp(16)
-                },
-            )
-            addView(
-                repeatCircleKey("\u232B", GRAY_KEY) { onBackspaceTap?.invoke() },
-                LayoutParams(dp(48), dp(48)).apply {
-                    gravity = Gravity.BOTTOM or Gravity.END
-                    marginEnd = dp(18)
-                    bottomMargin = dp(77)
-                },
-            )
+        VoiceKeyBar(context).apply {
+            addKey(globeKey { onImeSwitchTap?.invoke() }, row = 2, column = 0)
+            addKey(spaceKey { onSpaceTap?.invoke() }, row = 2, column = 1)
+            addKey(actionKey, row = 2, column = 2)
+            addKey(repeatKey("\u232B") { onBackspaceTap?.invoke() }, row = 1, column = 2)
+            addKey(keyLabel("@", textSizeSp = 20f) { onAtTap?.invoke() }, row = 0, column = 2)
         }
 
     init {
@@ -178,9 +181,17 @@ class VoicePanelView(
             },
         )
         addView(
+            trackpadHint,
+            LayoutParams(LayoutParams.WRAP_CONTENT, dp(34)).apply {
+                gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                topMargin = dp(90)
+            },
+        )
+        addView(
             bottomBar,
-            LayoutParams(LayoutParams.MATCH_PARENT, dp(125)).apply {
+            LayoutParams(LayoutParams.MATCH_PARENT, dp(KEY_ROW_DP * 3)).apply {
                 gravity = Gravity.BOTTOM
+                bottomMargin = dp(BOTTOM_SAFE_DP)
             },
         )
 
@@ -188,6 +199,7 @@ class VoicePanelView(
     }
 
     fun setState(state: VoiceState) {
+        if (state != VoiceState.Idle) resetTrackpad()
         this.state = state
         orb.state = state
         when (state) {
@@ -259,38 +271,23 @@ class VoicePanelView(
     }
 
     /**
-     * 底部圆形小键。
+     * 底部键面：白底、13dp 圆角，和打字键盘的 `KeyView` 用同一套配色。
      *
      * 注意：回调必须**在点击那一刻**才去读属性，不能在构造时把值传进来——
      * 这些回调是 `onCreateView` 之后才被 VoiceWindow 赋上的，构造时全是 null，
      * 传值捕获会把它们永久钉死成 null（地球 / ⌫ / @ 三个键点了没反应就是这个原因）。
      */
-    private fun circleKey(
-        glyph: String,
-        color: Int,
-        onClick: () -> Unit,
-    ): TextView = TextView(context).apply {
-        text = glyph
-        gravity = Gravity.CENTER
-        setTextColor(ICON_DARK)
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f)
-        background = circleDrawable(color)
-        isClickable = true
-        setOnClickListener {
-            InputFeedbackManager.keyPressVibrate(this)
-            onClick()
-        }
-    }
-
-    private fun pillKey(
+    private fun keyLabel(
         label: String,
+        textSizeSp: Float = 14f,
         onClick: () -> Unit,
     ): TextView = TextView(context).apply {
         text = label
         gravity = Gravity.CENTER
-        setTextColor(ACTION_LABEL)
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
-        background = roundedDrawable(WHITE_KEY, dp(23))
+        includeFontPadding = false
+        setTextColor(TEXT_PRIMARY)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, textSizeSp)
+        background = roundedDrawable(WHITE_KEY, dp(KEY_CORNER_DP))
         isClickable = true
         setOnClickListener {
             InputFeedbackManager.keyPressVibrate(this)
@@ -299,19 +296,79 @@ class VoicePanelView(
     }
 
     /**
-     * 按住能连删的圆形键。
+     * 空格键：和拼音/EN 一样，长按进入触控板。
+     *
+     * 轻点仍然按一次空格；长按后拖动走 [onSpaceSlide]，松手不再补空格。
+     * [GestureFrame] 已经处理好长按延迟、步进和取消，这里只负责接回调。
+     */
+    private fun spaceKey(onTap: () -> Unit): FrameLayout =
+        GestureFrame(context).apply {
+            background = roundedDrawable(WHITE_KEY, dp(KEY_CORNER_DP))
+            isClickable = true
+            isTrackpad = true
+            onClick = onTap
+            onSlide = { dx, dy, _, _ ->
+                if (dx != 0 || dy != 0) onSpaceSlide?.invoke(dx, dy)
+            }
+            onTrackpadState = { active -> setTrackpadActive(active) }
+            addView(
+                TextView(context).apply {
+                    text = "空格"
+                    gravity = Gravity.CENTER
+                    includeFontPadding = false
+                    setTextColor(TEXT_PRIMARY)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                },
+                LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT),
+            )
+        }
+
+    /** 长按空格：底栏淡出，浮出「移动光标」。和打字键盘的触控板提示一致。 */
+    private fun setTrackpadActive(active: Boolean) {
+        bottomBar.animate().cancel()
+        trackpadHint.animate().cancel()
+        if (active) {
+            bottomBar.animate().alpha(0.22f).setDuration(120).start()
+            statusView.visibility = GONE
+            trackpadHint.visibility = VISIBLE
+            trackpadHint.animate().alpha(1f).setDuration(90).start()
+        } else {
+            bottomBar.animate().alpha(1f).setDuration(120).start()
+            statusView.visibility = if (state == VoiceState.Idle) VISIBLE else GONE
+            trackpadHint.animate().alpha(0f).setDuration(90).withEndAction {
+                if (trackpadHint.alpha == 0f) trackpadHint.visibility = GONE
+            }.start()
+        }
+    }
+
+    /** 切走或开始录音时把触控板状态立即收干净，避免底栏停在半透明。 */
+    private fun resetTrackpad() {
+        bottomBar.animate().cancel()
+        bottomBar.alpha = 1f
+        trackpadHint.animate().cancel()
+        trackpadHint.alpha = 0f
+        trackpadHint.visibility = GONE
+        statusView.visibility = if (state == VoiceState.Idle) VISIBLE else GONE
+    }
+
+    override fun onDetachedFromWindow() {
+        resetTrackpad()
+        super.onDetachedFromWindow()
+    }
+
+    /**
+     * 按住能连删的键。
      *
      * 语音面板这颗 ⌫ 原来只挂了 `setOnClickListener`，按多久都只删一个字；
      * 拼音/英文键盘的 ⌫ 是 `KeyView`，继承 [GestureFrame] 的 `isRepeatable`。
      * 这里直接复用同一个 [GestureFrame]：长按延迟、连发间隔、震动都跟打字键盘一致，
      * 不再手写一套定时器。
      */
-    private fun repeatCircleKey(
+    private fun repeatKey(
         glyph: String,
-        color: Int,
         onRepeat: () -> Unit,
     ): FrameLayout = GestureFrame(context).apply {
-        background = circleDrawable(color)
+        background = roundedDrawable(WHITE_KEY, dp(KEY_CORNER_DP))
         isClickable = true
         isRepeatable = true
         onClick = onRepeat
@@ -319,8 +376,9 @@ class VoicePanelView(
             TextView(context).apply {
                 text = glyph
                 gravity = Gravity.CENTER
-                setTextColor(ICON_DARK)
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f)
+                includeFontPadding = false
+                setTextColor(TEXT_PRIMARY)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 20f)
             },
             LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT),
         )
@@ -328,7 +386,7 @@ class VoicePanelView(
 
     /** 左下角那颗「切换输入法」：用画的地球，避免 emoji 字体的色块。回调同上，点击时才读。 */
     private fun globeKey(onClick: () -> Unit): FrameLayout = FrameLayout(context).apply {
-        background = circleDrawable(WHITE_KEY)
+        background = roundedDrawable(WHITE_KEY, dp(KEY_CORNER_DP))
         isClickable = true
         setOnClickListener {
             InputFeedbackManager.keyPressVibrate(this)
@@ -338,11 +396,6 @@ class VoicePanelView(
             GlobeGlyphView(context),
             LayoutParams(dp(20), dp(20)).apply { gravity = Gravity.CENTER },
         )
-    }
-
-    private fun circleDrawable(color: Int) = android.graphics.drawable.GradientDrawable().apply {
-        shape = android.graphics.drawable.GradientDrawable.OVAL
-        setColor(color)
     }
 
     private fun roundedDrawable(
@@ -355,6 +408,91 @@ class VoicePanelView(
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    private fun dp(value: Float): Int = (value * resources.displayMetrics.density).toInt()
+
+    /**
+     * 语音面板底部的三行键区。
+     *
+     * 几何直接抄 [KeyboardWindow] 的按键区：左右各留 6dp、列宽 15%/70%/15%、
+     * 行高 59dp（236dp 的四等分）、键面四周再内缩 3.5dp/6dp。
+     * 这样语音、拼音、EN 三屏的右下角动作键在同一个像素上。
+     */
+    private class KeyCell(
+        val view: View,
+        val row: Int,
+        val column: Int,
+    )
+
+    private inner class VoiceKeyBar(
+        context: Context,
+    ) : ViewGroup(context) {
+        private val cells = mutableListOf<KeyCell>()
+
+        init {
+            setPadding(dp(KEY_SIDE_PADDING_DP), 0, dp(KEY_SIDE_PADDING_DP), 0)
+        }
+
+        fun addKey(
+            content: View,
+            row: Int,
+            column: Int,
+        ) {
+            val slot =
+                FrameLayout(context).apply {
+                    setPadding(dp(KEY_GAP_X_DP), dp(KEY_GAP_Y_DP), dp(KEY_GAP_X_DP), dp(KEY_GAP_Y_DP))
+                    addView(content, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+                }
+            cells += KeyCell(slot, row, column)
+            addView(slot)
+        }
+
+        override fun onMeasure(
+            widthMeasureSpec: Int,
+            heightMeasureSpec: Int,
+        ) {
+            val width = MeasureSpec.getSize(widthMeasureSpec)
+            val innerWidth = width - paddingLeft - paddingRight
+            val side = (innerWidth * KEY_COLUMN_PERCENT).toInt()
+            val center = innerWidth - side * 2
+            val rowHeight = dp(KEY_ROW_DP)
+            for (cell in cells) {
+                val cellWidth = if (cell.column == 1) center else side
+                cell.view.measure(
+                    MeasureSpec.makeMeasureSpec(cellWidth, MeasureSpec.EXACTLY),
+                    MeasureSpec.makeMeasureSpec(rowHeight, MeasureSpec.EXACTLY),
+                )
+            }
+            setMeasuredDimension(width, rowHeight * 3)
+        }
+
+        override fun onLayout(
+            changed: Boolean,
+            left: Int,
+            top: Int,
+            right: Int,
+            bottom: Int,
+        ) {
+            val innerWidth = right - left - paddingLeft - paddingRight
+            val side = (innerWidth * KEY_COLUMN_PERCENT).toInt()
+            val center = innerWidth - side * 2
+            val rowHeight = dp(KEY_ROW_DP)
+            val col0 = paddingLeft
+            val col1 = col0 + side
+            val col2 = col1 + center
+            for (cell in cells) {
+                val x =
+                    when (cell.column) {
+                        0 -> col0
+                        1 -> col1
+                        else -> col2
+                    }
+                val cellWidth = if (cell.column == 1) center else side
+                val y = cell.row * rowHeight
+                cell.view.layout(x, y, x + cellWidth, y + rowHeight)
+            }
+        }
+    }
 
     companion object {
         /** 面板高度（dp）。Typeless 的语音键盘区约 320dp，比 Trime 默认键盘（250dp）高。 */
@@ -369,11 +507,17 @@ class VoicePanelView(
         /** 预览气泡最多留多少字；再多就取最后一段，两行放得下。 */
         private const val PREVIEW_MAX_CHARS = 30
 
+        /** 与打字键盘的四行网格对齐：236dp / 4 = 59dp；底行下面再留 20dp 给手势条。 */
+        private const val KEY_ROW_DP = 59
+        private const val KEY_SIDE_PADDING_DP = 6
+        private const val KEY_COLUMN_PERCENT = 0.15f
+        private const val KEY_GAP_X_DP = 3.5f
+        private const val KEY_GAP_Y_DP = 6f
+        private const val KEY_CORNER_DP = 13
+        private const val BOTTOM_SAFE_DP = 20
+
         private const val BACKGROUND = 0xFFF1F1F1.toInt()
         private const val WHITE_KEY = 0xFFFFFFFF.toInt()
-        private const val GRAY_KEY = 0xFFE4E4E4.toInt()
-        private const val ICON_DARK = 0xFF3A3A3A.toInt()
-        private const val ACTION_LABEL = 0xFF111111.toInt()
         private const val TEXT_PRIMARY = 0xFF111111.toInt()
         private const val TEXT_SECONDARY = 0xFF8A8A8A.toInt()
     }
