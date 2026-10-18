@@ -41,6 +41,10 @@ object VolcProtocol {
         val text: String? = null,
         val code: Int? = null,
         val message: String? = null,
+        /** 原始 flags 位：0x1 带 seq、0x2 末包、0x4 带 event。诊断用，别拿它当业务判据。 */
+        val flags: Int = 0,
+        /** `result` 里的字段名。只看键、不看值：用来分辨这一包是流式结果还是二遍结果。 */
+        val resultKeys: List<String> = emptyList(),
     )
 
     fun gzip(data: ByteArray): ByteArray {
@@ -131,30 +135,36 @@ object VolcProtocol {
                 payload = try {
                     gunzip(payload)
                 } catch (e: Exception) {
-                    return ParsedFrame(msgType, seq, isLast, event)
+                    return ParsedFrame(msgType, seq, isLast, event, flags = flags)
                 }
             }
             if (ser == SERIALIZATION_JSON) {
-                val text = try {
-                    org.json.JSONObject(String(payload, Charsets.UTF_8))
-                        .optJSONObject("result")
-                        ?.optString("text")
+                val result = try {
+                    org.json.JSONObject(String(payload, Charsets.UTF_8)).optJSONObject("result")
                 } catch (e: Exception) {
                     null
                 }
-                return ParsedFrame(msgType, seq, isLast, event, text = text)
+                return ParsedFrame(
+                    msgType,
+                    seq,
+                    isLast,
+                    event,
+                    text = result?.optString("text"),
+                    flags = flags,
+                    resultKeys = result?.keys()?.asSequence()?.toList().orEmpty(),
+                )
             }
-            return ParsedFrame(msgType, seq, isLast, event)
+            return ParsedFrame(msgType, seq, isLast, event, flags = flags)
         } else if (msgType == MSG_SERVER_ERROR) {
-            if (offset + 8 > frame.size) return ParsedFrame(msgType, seq, isLast, event)
+            if (offset + 8 > frame.size) return ParsedFrame(msgType, seq, isLast, event, flags = flags)
             val code = readInt32(frame, offset)
             val size = readUint32(frame, offset + 4)
             val start = offset + 8
             val end = (start + size).coerceAtMost(frame.size)
             val message = String(frame.copyOfRange(start, end), Charsets.UTF_8)
-            return ParsedFrame(msgType, seq, isLast, event, code = code, message = message)
+            return ParsedFrame(msgType, seq, isLast, event, code = code, message = message, flags = flags)
         }
-        return ParsedFrame(msgType, seq, isLast, event)
+        return ParsedFrame(msgType, seq, isLast, event, flags = flags)
     }
 
     /** 构造建连后的第一包（含识别参数与热词）。 */

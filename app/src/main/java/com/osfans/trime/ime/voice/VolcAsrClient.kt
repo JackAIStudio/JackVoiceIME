@@ -59,6 +59,13 @@ class VolcAsrClient(
     private var stopPending = false
     private val prebuffer = ArrayDeque<ByteArray>()
 
+    /** 发末包的时刻，用来算「停止 → 服务端回帧」的耗时。诊断用。 */
+    @Volatile
+    private var stopAt = 0L
+
+    /** 最后一版流式结果，只用于和终稿比对（不落正文）。诊断用。 */
+    private var lastPartial = ""
+
     @Volatile
     private var closed = false
 
@@ -100,11 +107,20 @@ class VolcAsrClient(
 
             override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
                 val parsed = VolcProtocol.parseServerFrame(bytes.toByteArray()) ?: return
+                // 诊断：每一帧都记下来。停止后到最终帧的耗时、以及「除了流式末帧之外
+                // 还会不会再来一包二遍结果」，都只能从这条日志里看出来。
+                logFrame(parsed)
                 when (parsed.msgType) {
                     VolcProtocol.MSG_SERVER_RESP -> {
                         val text = parsed.text.orEmpty()
                         if (text.isEmpty()) return
-                        if (parsed.isLast) listener.onFinal(text) else listener.onPartial(text)
+                        if (parsed.isLast) {
+                            logFinalVsPreview(text, parsed.resultKeys)
+                            listener.onFinal(text)
+                        } else {
+                            lastPartial = text
+                            listener.onPartial(text)
+                        }
                     }
                     VolcProtocol.MSG_SERVER_ERROR -> {
                         Log.e(TAG, "火山返回错误 code=${parsed.code} msg=${parsed.message}")
@@ -114,16 +130,57 @@ class VolcAsrClient(
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                if (closed) {
+                    // 自己 cancel 关的连接，OkHttp 也会走 onFailure，不是真错误。
+                    Log.i(TAG, "连接已由本地关闭，忽略这条 onFailure")
+                    return
+                }
                 Log.e(TAG, "火山连接失败: ${t.message}")
-                if (!closed) listener.onError(t.message ?: "连接失败")
+                listener.onError(t.message ?: "连接失败")
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-                Log.i(TAG, "火山连接关闭 code=$code")
+                Log.i(TAG, "火山连接关闭 code=$code 停止后=${elapsedSinceStop()}ms")
                 if (!closed) listener.onClosed()
             }
         })
     }
+
+    /** 诊断：一帧一行。isLast 的帧会被当作终稿直接上屏，所以用 I 级别标出来。 */
+    private fun logFrame(parsed: VolcProtocol.ParsedFrame) {
+        val len = parsed.text?.length ?: -1
+        val line =
+            "← 帧 type=0x${parsed.msgType.toString(16)} flags=0x${parsed.flags.toString(16)} " +
+                "seq=${parsed.seq} last=${parsed.isLast} len=$len 停止后=${elapsedSinceStop()}ms " +
+                "keys=${parsed.resultKeys}"
+        if (parsed.isLast || parsed.msgType == VolcProtocol.MSG_SERVER_ERROR) {
+            Log.i(TAG, line)
+        } else {
+            Log.d(TAG, line)
+        }
+    }
+
+    /**
+     * 诊断：终稿和最后一遍流式结果是不是**同一串字**。
+     *
+     * 这是判断「等到的到底是二遍终稿，还是流式尾帧」的唯一硬证据。只记是否相同和
+     * 首个不同的位置，不落任何正文——位置 + 长度足够定性，也不把用户说的话写进日志。
+     */
+    private fun logFinalVsPreview(finalText: String, keys: List<String>) {
+        val prev = lastPartial
+        val n = minOf(prev.length, finalText.length)
+        var i = 0
+        while (i < n && prev[i] == finalText[i]) i++
+        val same = i == n && prev.length == finalText.length
+        val verdict = if (same) "与预览逐字相同（二遍没改任何字）" else "与预览不同，首个不同在第 ${i + 1} 个字"
+        Log.i(
+            TAG,
+            "终稿 vs 最后一遍预览：same=$same 终稿=${finalText.length}字 预览=${prev.length}字 $verdict keys=$keys",
+        )
+    }
+
+    private fun elapsedSinceStop(): Long =
+        if (stopAt > 0) System.currentTimeMillis() - stopAt else -1L
 
     /** 送一帧 PCM（16kHz / 16bit / 单声道）。建连期间先缓冲，避免开头丢失。 */
     fun feed(pcm: ByteArray) {
@@ -157,7 +214,9 @@ class VolcAsrClient(
 
     /** 发结束包（负包），服务端随后给出二遍终稿。 */
     fun stop() {
+        stopAt = System.currentTimeMillis()
         if (!audioReady) {
+            Log.i(TAG, "停止：连接还没就绪，等 onOpen 再发末包")
             stopPending = true
             return
         }
@@ -176,6 +235,7 @@ class VolcAsrClient(
             payload,
         )
         socket.send(frame.toByteString())
+        Log.i(TAG, "已发末包 seq=-$seq，等二遍终稿")
     }
 
     fun cancel() {

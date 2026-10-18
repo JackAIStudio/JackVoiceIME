@@ -8,6 +8,7 @@ package com.osfans.trime.ime.voice
 import android.content.Context
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import com.osfans.trime.util.appContext
 import timber.log.Timber
 import java.util.concurrent.atomic.AtomicBoolean
@@ -48,6 +49,9 @@ object VoiceEngine {
     /** 本次录音开始时间，用来算听写时长（统计页要用）。 */
     private var startedAt = 0L
 
+    /** 点停止的时刻，用来区分「等到了终稿」和「超时拿一遍结果兜底」。 */
+    private var stopAt = 0L
+
     @Volatile
     var isRecording = false
         private set
@@ -83,11 +87,12 @@ object VoiceEngine {
                     }
 
                     override fun onFinal(text: String) {
+                        Log.i(TAG, "服务端终稿到达：${text.length} 字，停止后 ${elapsedSinceStop()}ms")
                         if (text.isNotEmpty()) {
                             result.setLength(0)
                             result.append(text)
                         }
-                        finish(final = true)
+                        finish(fromTimeout = false)
                     }
 
                     override fun onError(message: String) {
@@ -121,12 +126,14 @@ object VoiceEngine {
     fun stopRecording() {
         if (!isRecording) return
         isRecording = false
+        stopAt = System.currentTimeMillis()
+        Log.i(TAG, "停止录音：发末包，等终稿（上限 ${FINAL_TIMEOUT_MS}ms），当前一遍结果 ${result.length} 字")
         recorder?.stop()
         recorder = null
         asr?.stop()
         // 停录这一刻波形就该落地，别等终稿或超时。
         post { listener?.onLevel(0f) }
-        main.postDelayed({ finish(final = true) }, FINAL_TIMEOUT_MS)
+        main.postDelayed({ finish(fromTimeout = true) }, FINAL_TIMEOUT_MS)
     }
 
     /** 直接丢弃，不上屏。 */
@@ -142,8 +149,15 @@ object VoiceEngine {
         post { listener?.onLevel(0f) }
     }
 
-    private fun finish(final: Boolean) {
-        if (!stopped.compareAndSet(false, true)) return
+    /**
+     * 唯一出口。上屏文本可能是服务端终稿，也可能是 3 秒超时后用一遍结果兜底——
+     * 两者行为完全一样，只有日志能区分，所以 [fromTimeout] 必须记下来。
+     */
+    private fun finish(fromTimeout: Boolean) {
+        if (!stopped.compareAndSet(false, true)) {
+            Log.d(TAG, "重复 finish 被忽略（来自${if (fromTimeout) "超时兜底" else "终稿"}）")
+            return
+        }
         main.removeCallbacksAndMessages(null)
         val raw = result.toString()
         recorder?.stop()
@@ -154,6 +168,13 @@ object VoiceEngine {
         val text = raw.trim()
         val duration = if (startedAt > 0) System.currentTimeMillis() - startedAt else 0L
         startedAt = 0L
+        val waited = elapsedSinceStop()
+        stopAt = 0L
+        if (fromTimeout) {
+            Log.w(TAG, "没等到终稿，用一遍流式结果兜底：${text.length} 字，停止后 ${waited}ms")
+        } else {
+            Log.i(TAG, "终稿上屏：${text.length} 字，停止后 ${waited}ms")
+        }
         if (text.isNotEmpty()) {
             runCatching { VoiceHistory.append(appContext, text, duration) }
         }
@@ -170,6 +191,8 @@ object VoiceEngine {
         asr = null
         result.setLength(0)
         isRecording = false
+        Log.e(TAG, "识别失败：$message（停止后 ${elapsedSinceStop()}ms）")
+        stopAt = 0L
         post { listener?.onLevel(0f) }
         post { listener?.onError(message) }
     }
@@ -177,6 +200,11 @@ object VoiceEngine {
     private fun post(block: () -> Unit) {
         if (Looper.myLooper() == Looper.getMainLooper()) block() else main.post(block)
     }
+
+    private fun elapsedSinceStop(): Long =
+        if (stopAt > 0) System.currentTimeMillis() - stopAt else -1L
+
+    private const val TAG = "JackVoice"
 
     /** 停止录音后等二遍终稿的上限。 */
     private const val FINAL_TIMEOUT_MS = 3000L
