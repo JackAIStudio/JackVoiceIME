@@ -39,6 +39,8 @@ import com.osfans.trime.ime.voice.VoicePrefs
 import com.osfans.trime.ime.voice.VoiceStats
 import com.osfans.trime.ui.main.MainActivity
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import timber.log.Timber
@@ -73,6 +75,7 @@ class JackVoiceActivity : AppCompatActivity(), GlossarySyncManager.Listener {
 
     private var dictionaryTab = DictionaryTab.Hotwords
     private var currentTab = Tab.Home
+    private var syncTicker: Job? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
@@ -115,6 +118,19 @@ class JackVoiceActivity : AppCompatActivity(), GlossarySyncManager.Listener {
     override fun onResume() {
         super.onResume()
         GlossarySyncManager.onForeground(this)
+        syncTicker?.cancel()
+        syncTicker = lifecycleScope.launch {
+            while (true) {
+                delay(30_000)
+                GlossarySyncManager.onForeground(this@JackVoiceActivity)
+            }
+        }
+    }
+
+    override fun onPause() {
+        syncTicker?.cancel()
+        syncTicker = null
+        super.onPause()
     }
 
     override fun onDestroy() {
