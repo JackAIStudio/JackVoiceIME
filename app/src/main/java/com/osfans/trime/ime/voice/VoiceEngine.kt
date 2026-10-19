@@ -183,6 +183,9 @@ object VoiceEngine {
         asr = null
         result.setLength(0)
         val text = raw.trim()
+        val mode = VoicePrefs.punctuationMode(appContext)
+        val processed = runCatching { PostProcessor.process(text, appContext) }.getOrDefault(text)
+        val finalText = runCatching { PunctuationProcessor.apply(processed, mode) }.getOrDefault(processed)
         val duration = if (startedAt > 0) System.currentTimeMillis() - startedAt else 0L
         startedAt = 0L
         val waited = elapsedSinceStop()
@@ -192,11 +195,14 @@ object VoiceEngine {
         } else {
             Log.i(TAG, "终稿上屏：${text.length} 字，停止后 ${waited}ms")
         }
-        if (text.isNotEmpty()) {
-            runCatching { VoiceHistory.append(appContext, text, duration) }
+        if (finalText != text) {
+            Log.i(TAG, "标点处理（${mode.label}）：${text.length} → ${finalText.length} 字")
+        }
+        if (finalText.isNotEmpty()) {
+            runCatching { VoiceHistory.append(appContext, finalText, duration) }
         }
         post { listener?.onLevel(0f) }
-        post { listener?.onFinal(text) }
+        post { listener?.onFinal(finalText) }
     }
 
     private fun finishWithError(message: String) {

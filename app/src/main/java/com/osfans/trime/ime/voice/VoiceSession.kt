@@ -180,9 +180,8 @@ object VoiceSession : VoiceEngine.Listener {
             return
         }
         if (text.isBlank()) return
-        val processed = PostProcessor.process(text, svc)
-        if (processed.isBlank()) return
-        deliver(processed)
+        // 替换词和标点已经在 VoiceEngine.finish 里处理过，这里只负责上屏。
+        deliver(text)
     }
 
     override fun onError(message: String) {

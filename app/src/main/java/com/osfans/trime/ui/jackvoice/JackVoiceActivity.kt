@@ -36,6 +36,7 @@ import com.osfans.trime.data.prefs.AppearanceManager
 import com.osfans.trime.ime.voice.GlossarySyncClient
 import com.osfans.trime.ime.voice.GlossarySyncManager
 import com.osfans.trime.ime.voice.HotwordTableSync
+import com.osfans.trime.ime.voice.PunctuationMode
 import com.osfans.trime.ime.voice.VoiceDictionary
 import com.osfans.trime.ime.voice.VoiceHistory
 import com.osfans.trime.ime.voice.VoicePrefs
@@ -1025,6 +1026,17 @@ class JackVoiceActivity :
             },
         )
         voice.addView(Jv.divider(this))
+        val punctuation = VoicePrefs.punctuationMode(this)
+        voice.addView(
+            Jv.row(
+                this,
+                "标点",
+                punctuation.hint,
+                trailing = punctuation.label,
+                chevron = true,
+            ) { choosePunctuationMode() },
+        )
+        voice.addView(Jv.divider(this))
         val boostingTableId = VoicePrefs.boostingTableId(this)
         voice.addView(
             Jv.row(
@@ -1201,6 +1213,22 @@ class JackVoiceActivity :
             .setView(input)
             .setPositiveButton("保存") { _, _ ->
                 VoicePrefs.setTosSecretKey(this, input.text.toString())
+                select(Tab.Settings)
+            }.setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun choosePunctuationMode() {
+        val modes = PunctuationMode.entries
+        AlertDialog
+            .Builder(this)
+            .setTitle("标点")
+            .setSingleChoiceItems(
+                modes.map { it.label }.toTypedArray(),
+                VoicePrefs.punctuationMode(this).ordinal,
+            ) { dialog, which ->
+                VoicePrefs.setPunctuationMode(this, modes[which])
+                dialog.dismiss()
                 select(Tab.Settings)
             }.setNegativeButton(android.R.string.cancel, null)
             .show()

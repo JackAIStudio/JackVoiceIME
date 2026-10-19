@@ -6,15 +6,20 @@
 package com.osfans.trime.ime.voice
 
 import android.content.Context
+import android.content.res.ColorStateList
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RectF
+import android.graphics.Typeface
+import android.graphics.drawable.Drawable
+import android.graphics.drawable.RippleDrawable
 import android.text.TextUtils
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.TextView
 import com.osfans.trime.R
 import com.osfans.trime.ime.keyboard.GestureFrame
@@ -33,7 +38,7 @@ import kotlin.math.sqrt
  *   中间那颗大按钮      中心 159dp（空闲胶囊 148×56 / 录音圆直径 123、光晕 150）
  *   流式预览气泡        顶端 242dp、最多两行（只在录音/处理时出现）
  *   「再次点击以完成」   顶端 294dp（只在录音且还没有预览时出现）
- *   底部键区            与拼音/EN 共用四行网格：地球 / 空格 / 动作键（15% / 70% / 15%），
+ *   底部键区            与拼音/EN 共用四行网格：标点 / 空格 / 动作键（15% / 70% / 15%），
  *                       动作键上方一格是 ⌫，再上一格是 @；键面内缩 3.5×6dp、圆角 13dp
  *
  * 录音与处理态**整条底栏收起**——和 Typeless 一样，录音时画面只剩那颗大圆。
@@ -43,8 +48,11 @@ class VoicePanelView(
 ) : FrameLayout(context) {
     var onOrbTap: (() -> Unit)? = null
 
-    /** 左下角：弹出系统输入法选择器（初期还要用别的输入法打字）。 */
-    var onImeSwitchTap: (() -> Unit)? = null
+    /**
+     * 左下角：点按循环三档，长按弹出三选一菜单直接跳。
+     * 三档都在客户端生效，窗口只负责把新档位落盘。
+     */
+    var onPunctuationModeChange: ((PunctuationMode) -> Unit)? = null
     var onSpaceTap: (() -> Unit)? = null
     var onSpaceSlide: ((dx: Int, dy: Int) -> Unit)? = null
     var onBackspaceTap: (() -> Unit)? = null
@@ -129,17 +137,96 @@ class VoicePanelView(
     /** 需要跟着外观模式重新取色的键（键面 + 文字），刷新时统一过一遍。 */
     private val themedKeys = mutableListOf<Pair<View, TextView?>>()
 
-    private val globeGlyphs = mutableListOf<GlobeGlyphView>()
-
     private val actionKey = keyLabel("") { onActionTap?.invoke() }
 
+    // ── 左下角「标点」键 ────────────────────────────────────────────────
+
+    private val punctuationValue =
+        TextView(context).apply {
+            text = PunctuationMode.Full.label
+            gravity = Gravity.CENTER
+            includeFontPadding = false
+            setTextColor(JvColors.text)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            typeface = Typeface.DEFAULT_BOLD
+        }
+
+    private var punctuationMode = PunctuationMode.Full
+
+    private val punctuationKey =
+        FrameLayout(context).apply {
+            background = roundedDrawable(JvColors.keyBg, dp(KEY_CORNER_DP))
+            isClickable = true
+            isLongClickable = true
+            setOnClickListener {
+                InputFeedbackManager.keyPressVibrate(this)
+                cyclePunctuation()
+            }
+            setOnLongClickListener {
+                InputFeedbackManager.keyPressVibrate(this)
+                showPunctuationMenu()
+                true
+            }
+            addView(
+                punctuationValue,
+                LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT),
+            )
+        }
+
+    private data class PunctuationMenuRow(
+        val mode: PunctuationMode,
+        val view: LinearLayout,
+        val check: TextView,
+        val title: TextView,
+        val hint: TextView,
+    )
+
+    private val punctuationMenuRows = mutableListOf<PunctuationMenuRow>()
+
+    private val punctuationMenu = buildPunctuationMenu().apply { visibility = GONE }
+
     /**
-     * 底行与打字键盘同一套坐标：地球在 123 的位置、空格在中缝、动作键在右下角，
+     * 切换档位时在键上方冒一下的提示。Toast 在输入法窗口里会被键盘盖住，
+     * 所以用面板内的一小块气泡，位置就在标点键正上方。
+     */
+    private val punctuationNotice =
+        TextView(context).apply {
+            setTextColor(JvColors.trackpadHintText)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+            gravity = Gravity.CENTER
+            includeFontPadding = false
+            setPadding(dp(12), dp(5), dp(12), dp(5))
+            background = roundedDrawable(JvColors.trackpadHintBg, dp(12))
+            visibility = GONE
+            alpha = 0f
+            isClickable = false
+        }
+
+    private val hidePunctuationNotice =
+        Runnable {
+            punctuationNotice
+                .animate()
+                .alpha(0f)
+                .setDuration(160)
+                .withEndAction { punctuationNotice.visibility = GONE }
+                .start()
+        }
+
+    private val punctuationScrim =
+        View(context).apply {
+            setBackgroundColor(0x2E000000)
+            isClickable = true
+            setOnClickListener { hidePunctuationMenu() }
+            visibility = GONE
+        }
+
+    /**
+     * 底行与打字键盘同一套坐标：标点在 123 的位置、空格在中缝、动作键在右下角，
      * ⌫ 和 @ 顺着右列往上排。切到拼音/EN 时右下角那颗键不跳位置。
      */
     private val bottomBar =
         VoiceKeyBar(context).apply {
-            addKey(globeKey { onImeSwitchTap?.invoke() }, row = 2, column = 0)
+            addKey(punctuationKey, row = 2, column = 0)
             addKey(spaceKey { onSpaceTap?.invoke() }, row = 2, column = 1)
             addKey(actionKey, row = 2, column = 2)
             addKey(repeatKey("\u232B") { onBackspaceTap?.invoke() }, row = 1, column = 2)
@@ -199,12 +286,33 @@ class VoicePanelView(
                 bottomMargin = dp(BOTTOM_SAFE_DP)
             },
         )
+        // 长按标点键时盖在面板上：先铺一层可点的半透明遮罩，再把菜单卡片放在上面。
+        addView(
+            punctuationNotice,
+            LayoutParams(LayoutParams.WRAP_CONTENT, dp(28)).apply {
+                gravity = Gravity.BOTTOM or Gravity.START
+                leftMargin = dp(KEY_SIDE_PADDING_DP + 4)
+                bottomMargin = dp(BOTTOM_SAFE_DP + KEY_ROW_DP + 8)
+            },
+        )
+        addView(punctuationScrim, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT))
+        addView(
+            punctuationMenu,
+            LayoutParams(dp(236), LayoutParams.WRAP_CONTENT).apply {
+                gravity = Gravity.BOTTOM or Gravity.START
+                leftMargin = dp(KEY_SIDE_PADDING_DP + 4)
+                bottomMargin = dp(BOTTOM_SAFE_DP + KEY_ROW_DP + 8)
+            },
+        )
 
         setState(VoiceState.Idle)
     }
 
     fun setState(state: VoiceState) {
-        if (state != VoiceState.Idle) resetTrackpad()
+        if (state != VoiceState.Idle) {
+            resetTrackpad()
+            hidePunctuationMenuNow()
+        }
         this.state = state
         orb.state = state
         when (state) {
@@ -268,6 +376,157 @@ class VoicePanelView(
         actionKey.text = label
     }
 
+    /** 窗口展开 / 切回面板时同步当前档位；键面文字和强调色一起更新。 */
+    fun setPunctuationMode(mode: PunctuationMode) {
+        punctuationMode = mode
+        punctuationValue.text = mode.label
+        punctuationValue.setTextColor(
+            if (mode == PunctuationMode.Full) JvColors.text else JvColors.accent,
+        )
+        punctuationKey.contentDescription = "标点：${mode.label}。点按切换，长按直选"
+    }
+
+    private fun cyclePunctuation() {
+        val next = punctuationMode.next()
+        setPunctuationMode(next)
+        onPunctuationModeChange?.invoke(next)
+        announcePunctuation(next)
+    }
+
+    private fun selectPunctuation(mode: PunctuationMode) {
+        setPunctuationMode(mode)
+        onPunctuationModeChange?.invoke(mode)
+        hidePunctuationMenu()
+        announcePunctuation(mode)
+    }
+
+    private fun announcePunctuation(mode: PunctuationMode) {
+        punctuationNotice.removeCallbacks(hidePunctuationNotice)
+        punctuationNotice.animate().cancel()
+        punctuationNotice.text = mode.label
+        punctuationNotice.visibility = VISIBLE
+        punctuationNotice.alpha = 1f
+        punctuationNotice.postDelayed(hidePunctuationNotice, 1100)
+    }
+
+    /**
+     * 长按菜单：三档全列出来，点哪档直接跳，不用循环。
+     * 菜单是一个盖在面板里的卡片，不新开 PopupWindow——输入法窗口里再弹窗口容易拿不到 token。
+     */
+    private fun buildPunctuationMenu(): LinearLayout {
+        val card =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                background = roundedDrawable(JvColors.keyBg, dp(18))
+                elevation = dp(10).toFloat()
+                setPadding(dp(8), dp(8), dp(8), dp(8))
+                // 点卡片空白处不穿透到后面的遮罩，只有卡片外才关闭。
+                isClickable = true
+            }
+        for (mode in PunctuationMode.entries) {
+            val check =
+                TextView(context).apply {
+                    text = "✓"
+                    gravity = Gravity.CENTER
+                    includeFontPadding = false
+                    setTextColor(JvColors.accent)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+                    alpha = 0f
+                }
+            val title =
+                TextView(context).apply {
+                    text = mode.label
+                    includeFontPadding = false
+                    setTextColor(JvColors.text)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+                }
+            val hint =
+                TextView(context).apply {
+                    text = mode.hint
+                    includeFontPadding = false
+                    setTextColor(JvColors.textSecondary)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 10.5f)
+                }
+            val labels =
+                LinearLayout(context).apply {
+                    orientation = LinearLayout.VERTICAL
+                    addView(title)
+                    addView(hint)
+                }
+            val row =
+                LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(6), 0, dp(10), 0)
+                    isClickable = true
+                    background = ripple()
+                    contentDescription = "${mode.label}，${mode.hint}"
+                    setOnClickListener {
+                        InputFeedbackManager.keyPressVibrate(this)
+                        selectPunctuation(mode)
+                    }
+                    addView(check, LinearLayout.LayoutParams(dp(30), LayoutParams.MATCH_PARENT))
+                    addView(labels, LinearLayout.LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
+                }
+            punctuationMenuRows += PunctuationMenuRow(mode, row, check, title, hint)
+            card.addView(row, LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, dp(52)))
+        }
+        return card
+    }
+
+    private fun showPunctuationMenu() {
+        if (state != VoiceState.Idle) return
+        punctuationNotice.removeCallbacks(hidePunctuationNotice)
+        punctuationNotice.animate().cancel()
+        punctuationNotice.visibility = GONE
+        updatePunctuationChecks()
+        punctuationScrim.visibility = VISIBLE
+        punctuationScrim.alpha = 0f
+        punctuationMenu.visibility = VISIBLE
+        punctuationMenu.alpha = 0f
+        punctuationMenu.translationY = dp(10).toFloat()
+        punctuationScrim.animate().alpha(1f).setDuration(120).start()
+        punctuationMenu.animate().alpha(1f).translationY(0f).setDuration(140).start()
+    }
+
+    private fun hidePunctuationMenu() {
+        if (punctuationMenu.visibility != VISIBLE) return
+        punctuationMenu
+            .animate()
+            .alpha(0f)
+            .translationY(dp(8).toFloat())
+            .setDuration(100)
+            .withEndAction { punctuationMenu.visibility = GONE }
+            .start()
+        punctuationScrim
+            .animate()
+            .alpha(0f)
+            .setDuration(100)
+            .withEndAction { punctuationScrim.visibility = GONE }
+            .start()
+    }
+
+    private fun hidePunctuationMenuNow() {
+        punctuationScrim.animate().cancel()
+        punctuationMenu.animate().cancel()
+        punctuationScrim.visibility = GONE
+        punctuationMenu.visibility = GONE
+        punctuationNotice.removeCallbacks(hidePunctuationNotice)
+        punctuationNotice.animate().cancel()
+        punctuationNotice.visibility = GONE
+    }
+
+    private fun updatePunctuationChecks() {
+        for (row in punctuationMenuRows) {
+            row.check.alpha = if (row.mode == punctuationMode) 1f else 0f
+        }
+    }
+
+    private fun ripple(): Drawable {
+        val tint = (JvColors.text and 0x00FFFFFF) or 0x1F000000
+        return RippleDrawable(ColorStateList.valueOf(tint), null, null)
+    }
+
     /** 外观模式变化后重新取色，不重建视图；录音动画和当前状态都不受影响。 */
     fun refreshColors() {
         setBackgroundColor(JvColors.keyboardBg)
@@ -282,7 +541,19 @@ class VoicePanelView(
             key.background = roundedDrawable(JvColors.keyBg, dp(KEY_CORNER_DP))
             label?.setTextColor(JvColors.text)
         }
-        globeGlyphs.forEach { it.refreshColors() }
+        punctuationKey.background = roundedDrawable(JvColors.keyBg, dp(KEY_CORNER_DP))
+        punctuationValue.setTextColor(
+            if (punctuationMode == PunctuationMode.Full) JvColors.text else JvColors.accent,
+        )
+        punctuationMenu.background = roundedDrawable(JvColors.keyBg, dp(18))
+        punctuationNotice.setTextColor(JvColors.trackpadHintText)
+        punctuationNotice.background = roundedDrawable(JvColors.trackpadHintBg, dp(12))
+        for (row in punctuationMenuRows) {
+            row.view.background = ripple()
+            row.check.setTextColor(JvColors.accent)
+            row.title.setTextColor(JvColors.text)
+            row.hint.setTextColor(JvColors.textSecondary)
+        }
         orb.refreshColors()
     }
 
@@ -298,7 +569,7 @@ class VoicePanelView(
      *
      * 注意：回调必须**在点击那一刻**才去读属性，不能在构造时把值传进来——
      * 这些回调是 `onCreateView` 之后才被 VoiceWindow 赋上的，构造时全是 null，
-     * 传值捕获会把它们永久钉死成 null（地球 / ⌫ / @ 三个键点了没反应就是这个原因）。
+     * 传值捕获会把它们永久钉死成 null（左下角 / ⌫ / @ 三个键点了没反应就是这个原因）。
      */
     private fun keyLabel(
         label: String,
@@ -383,6 +654,7 @@ class VoicePanelView(
 
     override fun onDetachedFromWindow() {
         resetTrackpad()
+        hidePunctuationMenuNow()
         super.onDetachedFromWindow()
     }
 
@@ -418,27 +690,6 @@ class VoicePanelView(
                 )
             }
         themedKeys += key to label
-        return key
-    }
-
-    /** 左下角那颗「切换输入法」：用画的地球，避免 emoji 字体的色块。回调同上，点击时才读。 */
-    private fun globeKey(onClick: () -> Unit): FrameLayout {
-        val glyph = GlobeGlyphView(context)
-        val key =
-            FrameLayout(context).apply {
-                background = roundedDrawable(JvColors.keyBg, dp(KEY_CORNER_DP))
-                isClickable = true
-                setOnClickListener {
-                    InputFeedbackManager.keyPressVibrate(this)
-                    onClick()
-                }
-                addView(
-                    glyph,
-                    LayoutParams(dp(20), dp(20)).apply { gravity = Gravity.CENTER },
-                )
-            }
-        globeGlyphs += glyph
-        themedKeys += key to null
         return key
     }
 
@@ -782,35 +1033,5 @@ class VoiceOrbView(
         /** 音量的起落速度（每秒逼近比例）。起得快才跟得上说话，落得慢一点不闪。 */
         private const val ATTACK_PER_SEC = 22f
         private const val RELEASE_PER_SEC = 5f
-    }
-}
-
-/** 简笔地球：外圈 + 一道竖椭圆 + 一条横线。用来表示「切换输入法」。 */
-class GlobeGlyphView(
-    context: Context,
-) : View(context) {
-    private val paint =
-        Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE
-            color = JvColors.glyph
-            strokeCap = Paint.Cap.ROUND
-        }
-
-    fun refreshColors() {
-        paint.color = JvColors.glyph
-        invalidate()
-    }
-
-    override fun onDraw(canvas: Canvas) {
-        super.onDraw(canvas)
-        paint.color = JvColors.glyph
-        val cx = width / 2f
-        val cy = height / 2f
-        val r = minOf(width, height) / 2f - paint.strokeWidth
-        paint.strokeWidth = r * 0.16f
-        canvas.drawCircle(cx, cy, r, paint)
-        canvas.drawLine(cx - r, cy, cx + r, cy, paint)
-        val rect = android.graphics.RectF(cx - r * 0.46f, cy - r, cx + r * 0.46f, cy + r)
-        canvas.drawArc(rect, 0f, 360f, false, paint)
     }
 }

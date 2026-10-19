@@ -21,6 +21,7 @@ object VoicePrefs {
     const val KEY_RESOURCE_ID = "voice_resource_id"
     const val KEY_BOOSTING_TABLE_ID = "voice_boosting_table_id"
     const val KEY_HOTWORDS_ENABLED = "voice_hotwords_enabled"
+    const val KEY_PUNCTUATION_MODE = "voice_punctuation_mode"
     const val KEY_LAST_TAB = "voice_last_tab"
     const val KEY_TOS_ACCESS_KEY = "voice_tos_access_key"
     const val KEY_TOS_SECRET_KEY = "voice_tos_secret_key"
@@ -47,6 +48,14 @@ object VoicePrefs {
         .trim()
 
     fun hotwordsEnabled(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_HOTWORDS_ENABLED, true)
+
+    /** 默认全标点：第一次用不丢东西，要改在键盘左下角一点就切。 */
+    fun punctuationMode(ctx: Context): PunctuationMode = PunctuationMode.fromId(prefs(ctx).getString(KEY_PUNCTUATION_MODE, null))
+
+    fun setPunctuationMode(
+        ctx: Context,
+        mode: PunctuationMode,
+    ) = prefs(ctx).edit { putString(KEY_PUNCTUATION_MODE, mode.id) }
 
     fun setApiKey(
         ctx: Context,

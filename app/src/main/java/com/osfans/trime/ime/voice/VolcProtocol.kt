@@ -178,6 +178,7 @@ object VolcProtocol {
         val request = org.json.JSONObject().apply {
             put("model_name", "bigmodel")
             put("enable_itn", true)
+            // 标点始终要：三档都靠服务端给出标点位置，「无标点」也是先拿到标点再换成空格。
             put("enable_punc", true)
             put("enable_ddc", false)
             // 对齐 AgenBoard：词级时间戳 + 完整结果

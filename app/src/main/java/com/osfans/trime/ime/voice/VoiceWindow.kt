@@ -28,8 +28,7 @@ import org.kodein.di.instance
  * 切到拼音 / EN 把这个窗口 detach 掉，听写照样在后台跑；切回来时按会话状态
  * 恢复画面（录音中 / 处理中 / 空闲），不会重置成「点击说话」。
  *
- * 上屏后**留在语音面板**（Typeless 也是这样）；要打字按顶栏的「拼」/「EN」
- * 或左下角的键盘键。
+ * 上屏后**留在语音面板**（Typeless 也是这样）；要打字按顶栏的「拼」/「EN」。
  */
 class VoiceWindow(di: DI) :
     BoardWindow.NoBarBoardWindow(di),
@@ -50,8 +49,9 @@ class VoiceWindow(di: DI) :
     override fun onCreateView(): View {
         val view = VoicePanelView(context)
         view.onOrbTap = { onOrbTap() }
-        // 左下角换成「切换输入法」：初期还要用别的输入法打字
-        view.onImeSwitchTap = { showImePicker() }
+        // 左下角是标点档位：点按循环，长按直选。窗口只负责落盘。
+        view.setPunctuationMode(VoicePrefs.punctuationMode(context))
+        view.onPunctuationModeChange = { VoicePrefs.setPunctuationMode(context, it) }
         view.onSpaceTap = { service.commitText(" ") }
         view.onSpaceSlide = { dx, dy -> service.moveCursorBy(dx, dy) }
         view.onBackspaceTap = { service.sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL) }
@@ -75,6 +75,8 @@ class VoiceWindow(di: DI) :
         VoiceSession.addListener(this)
         panel?.setActionLabel(actionLabel())
         panel?.toolbar?.setActive(VoiceTab.Voice)
+        // 设置页可能刚改过标点；回到面板时同步一次。
+        panel?.setPunctuationMode(VoicePrefs.punctuationMode(context))
         // 记住用户停在这一屏：下次展开键盘先回到语音面板（默认也是它）。
         VoicePrefs.setLastTab(context, VoiceTab.Voice)
         // 另一端可能刚改过词库：面板展开时做一次节流检查，下一轮听写就能用上。
@@ -136,14 +138,6 @@ class VoiceWindow(di: DI) :
     }
 
     // ── 底栏与顶栏 ───────────────────────────────────────────────────────
-
-    /** 弹出系统输入法选择器——这就是那颗地球键该干的事。 */
-    private fun showImePicker() {
-        runCatching {
-            service.getSystemService(android.view.inputmethod.InputMethodManager::class.java)
-                ?.showInputMethodPicker()
-        }
-    }
 
     private fun switchToKeyboard(tab: VoiceTab? = null) {
         windowManager.attachWindow(keyboardWindow)
