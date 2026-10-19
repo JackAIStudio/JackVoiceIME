@@ -66,6 +66,9 @@ class VoiceWindow(di: DI) :
             service.switchInputLanguage(true)
             switchToKeyboard(VoiceTab.English)
         }
+        // 顶栏最右一格「收起键盘」。语音面板和打字键盘各有一份顶栏，
+        // 两边的回调都要接上——只在 KeyboardWindow 里接的话，语音面板上这颗键点了没反应。
+        view.toolbar.onHideTap = { service.requestHideSelf(0) }
         panel = view
         return view
     }

@@ -9,9 +9,11 @@ import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.Rect
 import android.graphics.Typeface
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.TouchDelegate
 import android.view.View
 import android.widget.FrameLayout
 import android.widget.LinearLayout
@@ -195,6 +197,39 @@ class VoiceToolbarView(
         setActive(VoiceTab.Voice)
     }
 
+    override fun onLayout(
+        changed: Boolean,
+        left: Int,
+        top: Int,
+        right: Int,
+        bottom: Int,
+    ) {
+        super.onLayout(changed, left, top, right, bottom)
+        updateHideTouchDelegate()
+    }
+
+    /**
+     * 「收起键盘」是顶栏最右一格，视觉上只有 42×34dp，手指擦到胶囊边缘或右侧
+     * 留白就容易点空。这里把可点范围放大到整个顶栏右上角（含上下边距和右侧
+     * 15dp 留白），视觉不变，也不侵占左边的「EN」。
+     *
+     * 候选行模式下这一格被 GONE 掉了，右上角换成「展开候选」；这时必须撤掉
+     * 代理，否则会把展开键的点击抢走。
+     */
+    private fun updateHideTouchDelegate() {
+        if (switcher.visibility != View.VISIBLE || hideCell.width == 0 || width == 0 || height == 0) {
+            touchDelegate = null
+            return
+        }
+        val cellLeft = switcher.left + hideCell.left
+        touchDelegate =
+            if (cellLeft in 1 until width) {
+                TouchDelegate(Rect(cellLeft, 0, width, height), hideCell)
+            } else {
+                null
+            }
+    }
+
     /** 正在拼写：候选顶替品牌与胶囊。 */
     fun setComposing(value: Boolean) {
         if (composing == value) return
@@ -206,6 +241,8 @@ class VoiceToolbarView(
             candidates.clear()
             setExpanded(false)
         }
+        // 候选行的展开键和新露出来的收起格都会占右上角，切换后重算一次代理。
+        post { updateHideTouchDelegate() }
     }
 
     fun updateCandidates(

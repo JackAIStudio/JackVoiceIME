@@ -306,6 +306,13 @@ class VoicePanelView(
         setState(VoiceState.Idle)
     }
 
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        // 面板切到拼音键盘再切回来时，标点菜单/遮罩可能停在动画半路：
+        // 一个 alpha=0 但仍是 VISIBLE 的遮罩会吃掉顶栏和整块面板的触摸。
+        hidePunctuationMenuNow()
+    }
+
     fun setState(state: VoiceState) {
         if (state != VoiceState.Idle) {
             resetTrackpad()
@@ -477,6 +484,9 @@ class VoicePanelView(
         punctuationNotice.removeCallbacks(hidePunctuationNotice)
         punctuationNotice.animate().cancel()
         punctuationNotice.visibility = GONE
+        // 上一次菜单可能还在收起动画里；先停掉，免得收尾回调把刚打开的菜单又设成 GONE。
+        punctuationScrim.animate().cancel()
+        punctuationMenu.animate().cancel()
         updatePunctuationChecks()
         punctuationScrim.visibility = VISIBLE
         punctuationScrim.alpha = 0f
@@ -488,20 +498,31 @@ class VoicePanelView(
     }
 
     private fun hidePunctuationMenu() {
-        if (punctuationMenu.visibility != VISIBLE) return
-        punctuationMenu
-            .animate()
-            .alpha(0f)
-            .translationY(dp(8).toFloat())
-            .setDuration(100)
-            .withEndAction { punctuationMenu.visibility = GONE }
-            .start()
-        punctuationScrim
-            .animate()
-            .alpha(0f)
-            .setDuration(100)
-            .withEndAction { punctuationScrim.visibility = GONE }
-            .start()
+        val menuVisible = punctuationMenu.visibility == VISIBLE
+        val scrimVisible = punctuationScrim.visibility == VISIBLE
+        // 菜单已经没了、遮罩却还留着，是动画被打断后的残留：它看不见但会吃掉
+        // 整块面板的触摸（顶栏的「收起键盘」首当其冲）。这里一并收掉。
+        if (!menuVisible && !scrimVisible) return
+        if (menuVisible) {
+            punctuationMenu
+                .animate()
+                .alpha(0f)
+                .translationY(dp(8).toFloat())
+                .setDuration(100)
+                .withEndAction {
+                    punctuationMenu.visibility = GONE
+                    // 遮罩跟着菜单一起收：不再依赖它自己的动画回调是否被取消。
+                    punctuationScrim.visibility = GONE
+                }.start()
+        }
+        if (scrimVisible) {
+            punctuationScrim
+                .animate()
+                .alpha(0f)
+                .setDuration(100)
+                .withEndAction { punctuationScrim.visibility = GONE }
+                .start()
+        }
     }
 
     private fun hidePunctuationMenuNow() {
