@@ -32,6 +32,7 @@ import com.osfans.trime.ime.broadcast.InputBroadcastReceiver
 import com.osfans.trime.ime.core.TrimeInputMethodService
 import com.osfans.trime.ime.keyboard.KeyboardPrefs.isLandscapeMode
 import com.osfans.trime.ime.popup.PopupDelegate
+import com.osfans.trime.ime.voice.CandidatePages
 import com.osfans.trime.ime.voice.CandidatePanelView
 import com.osfans.trime.ime.voice.VoicePrefs
 import com.osfans.trime.ime.voice.VoiceSession
@@ -106,6 +107,15 @@ class KeyboardWindow(di: DI) :
     /** 当前候选条是英文补全给的（不是 Rime 的中文候选）。 */
     private var englishMode = false
     private var candidatesExpanded = false
+
+    /** 展开面板的分页游标：Rime 一次只给 16 条，再往后得自己按全局下标要。 */
+    private val candidatePages = CandidatePages()
+
+    /** 每次换候选都加一；飞在半路上的分页请求回来时对不上号就丢掉。 */
+    private var candidatePagesToken = 0
+
+    /** Rime 报的候选总数；-1 表示它也不知道有多少，意味着 16 条后面还有。 */
+    private var candidateTotal = -1
 
     /**
      * 当前输入框强制 ASCII（密码 / 邮箱 / 数字）。
@@ -221,6 +231,8 @@ class KeyboardWindow(di: DI) :
                     collapseCandidatePanel()
                     pickCandidate(index)
                 }
+                // 滑到底：Rime 的 bulk 候选只有 16 条，后面的得一批批要。
+                onLoadMore = { requestMoreCandidates() }
             }
 
         // 按键区：左右各留 6dp（Typeless 的键不贴屏幕边），整页候选面板叠在上面
@@ -661,7 +673,10 @@ class KeyboardWindow(di: DI) :
         lastCandidates = items.map { CandidateProto(it, "", "") }.toTypedArray()
         toolbar.updateCandidates(lastCandidates, 0)
         toolbar.setComposing(true)
-        if (candidatesExpanded && ::candidatePanel.isInitialized) candidatePanel.show(lastCandidates)
+        if (candidatesExpanded && ::candidatePanel.isInitialized) {
+            candidatePanel.show(lastCandidates)
+            restartCandidatePages()
+        }
     }
 
     fun clearEnglishCandidates() {
@@ -679,6 +694,7 @@ class KeyboardWindow(di: DI) :
 
     override fun onCandidateListUpdate(data: Candidates.Bulk) {
         if (englishMode) return
+        candidateTotal = data.total
         if (data.candidates.isEmpty()) {
             lastCandidates = emptyArray()
             setComposingToolbar(false)
@@ -691,6 +707,7 @@ class KeyboardWindow(di: DI) :
             }
             if (candidatesExpanded && ::candidatePanel.isInitialized) {
                 candidatePanel.show(data.candidates)
+                restartCandidatePages()
             }
         }
     }
@@ -711,16 +728,62 @@ class KeyboardWindow(di: DI) :
         if (::toolbar.isInitialized) toolbar.setExpanded(true)
         candidatePanel.show(lastCandidates)
         candidatePanel.visibility = View.VISIBLE
+        restartCandidatePages()
         return true
     }
 
     fun collapseCandidatePanel() {
         if (!candidatesExpanded) return
         candidatesExpanded = false
+        // 在飞的分页请求作废：回来时会发现 token 对不上
+        candidatePagesToken++
+        candidatePages.reset(lastCandidates.size, exhausted = true)
         if (::toolbar.isInitialized) toolbar.setExpanded(false)
         if (::candidatePanel.isInitialized) {
+            candidatePanel.setLoadingMore(false)
             candidatePanel.visibility = View.GONE
             candidatePanel.clear()
+        }
+    }
+
+    /**
+     * 重开一轮分页。
+     *
+     * Rime 的 bulk 候选最多 16 条；`total >= 0` 说明它已经把总数报过来了（后面没有
+     * 更多），英文候选又是本地词表给的、压根不归 Rime 管——这两种情况都直接判到头，
+     * 别再白要一次。
+     */
+    private fun restartCandidatePages() {
+        candidatePagesToken++
+        candidatePages.reset(
+            loaded = lastCandidates.size,
+            exhausted = englishMode || candidateTotal >= 0,
+        )
+        if (::candidatePanel.isInitialized) candidatePanel.setLoadingMore(false)
+        requestMoreCandidates()
+    }
+
+    /** 向 Rime 要下一批候选，回来接在展开面板后面。 */
+    private fun requestMoreCandidates() {
+        if (!candidatesExpanded || !::candidatePanel.isInitialized) return
+        val offset = candidatePages.beginLoad() ?: return
+        val token = candidatePagesToken
+        val limit = candidatePages.pageSize
+        candidatePanel.setLoadingMore(true)
+        rime.launchOnReady { api ->
+            val more = runCatching { api.getCandidates(offset, limit) }.getOrNull()
+            candidatePanel.post {
+                // 候选换了一批、或者面板已经收起：这批结果作废
+                if (token != candidatePagesToken) return@post
+                if (more == null) {
+                    candidatePages.abortLoad()
+                    candidatePanel.setLoadingMore(false)
+                    return@post
+                }
+                candidatePages.endLoad(more.size)
+                candidatePanel.setLoadingMore(false)
+                if (more.isNotEmpty()) candidatePanel.append(more)
+            }
         }
     }
 

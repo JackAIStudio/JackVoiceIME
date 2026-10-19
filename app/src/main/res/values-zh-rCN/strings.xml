@@ -253,4 +253,5 @@
     <string name="word_segment">分词</string>
     <string name="star_success">收藏成功</string>
     <string name="ignore_system_gesture_insets">忽略系统手势边衬区</string>
+    <string name="candidate_loading_more">加载中…</string>
 </resources>

@@ -83,6 +83,7 @@ q w e r t y u i o p        ← 按键
 | `commitEnglishSuggestion` | 删词干 + 提交整词要用 `beginBatchEdit/endBatchEdit` 包起来，并且**不要再 `clearEnglishSuggestions()`**——先清会把顶栏闪回「品牌 + 胶囊」，再点候选还可能吞字 |
 | `Rime.kt` 的 `inlinePreeditMode` | 强制 `COMPOSING_TEXT`：拼音字母直接进输入框；预编辑里的 `‸`(U+2038) 光标标记必须剥掉，不然会被当正文写进输入框 |
 | 主题 `CommitAction` 键 | 底行动作键。组合中先选高亮候选上屏，commit 到了再执行宿主 `imeOptions` 动作——**直接发 Return 会把原始拼音上屏** |
+| 展开候选面板（`CandidatePanelView`） | Rime 一次只交 16 条（JNI `getBulkCandidates` 的 bulk 上限），滑到底要靠 `CandidatePages` 按**全量下标**用 `getCandidates(offset, limit)` 一批批要；点候选传的也是全量下标，别改成面板里的序号 |
 
 ## 外观与深色模式
 
