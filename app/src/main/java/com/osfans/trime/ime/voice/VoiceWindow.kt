@@ -55,7 +55,6 @@ class VoiceWindow(di: DI) :
         view.onSpaceTap = { service.commitText(" ") }
         view.onSpaceSlide = { dx, dy -> service.moveCursorBy(dx, dy) }
         view.onBackspaceTap = { service.sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL) }
-        view.onAtTap = { service.commitText("@") }
         view.onActionTap = { performEditorAction() }
         // 顶部切换胶囊的「拼」/「EN」：切到拼音/英文键盘，并同步 Rime 的 ascii_mode。
         // 注意**不要**在这里 cancel 听写——手动拼写和听写是并行的两件事。

@@ -39,7 +39,7 @@ import kotlin.math.sqrt
  *   流式预览气泡        顶端 242dp、最多两行（只在录音/处理时出现）
  *   「再次点击以完成」   顶端 294dp（只在录音且还没有预览时出现）
  *   底部键区            与拼音/EN 共用四行网格：标点 / 空格 / 动作键（15% / 70% / 15%），
- *                       动作键上方一格是 ⌫，再上一格是 @；键面内缩 3.5×6dp、圆角 13dp
+ *                       动作键上方一格是 ⌫；键面内缩 3.5×6dp、圆角 13dp
  *
  * 录音与处理态**整条底栏收起**——和 Typeless 一样，录音时画面只剩那颗大圆。
  */
@@ -56,7 +56,6 @@ class VoicePanelView(
     var onSpaceTap: (() -> Unit)? = null
     var onSpaceSlide: ((dx: Int, dy: Int) -> Unit)? = null
     var onBackspaceTap: (() -> Unit)? = null
-    var onAtTap: (() -> Unit)? = null
     var onActionTap: (() -> Unit)? = null
 
     /** 顶部切换胶囊，语音面板与打字键盘共用同一个组件。 */
@@ -230,7 +229,6 @@ class VoicePanelView(
             addKey(spaceKey { onSpaceTap?.invoke() }, row = 2, column = 1)
             addKey(actionKey, row = 2, column = 2)
             addKey(repeatKey("\u232B") { onBackspaceTap?.invoke() }, row = 1, column = 2)
-            addKey(keyLabel("@", textSizeSp = 20f) { onAtTap?.invoke() }, row = 0, column = 2)
         }
 
     init {
@@ -569,18 +567,17 @@ class VoicePanelView(
      *
      * 注意：回调必须**在点击那一刻**才去读属性，不能在构造时把值传进来——
      * 这些回调是 `onCreateView` 之后才被 VoiceWindow 赋上的，构造时全是 null，
-     * 传值捕获会把它们永久钉死成 null（左下角 / ⌫ / @ 三个键点了没反应就是这个原因）。
+     * 传值捕获会把它们永久钉死成 null（左下角 / ⌫ 两个键点了没反应就是这个原因）。
      */
     private fun keyLabel(
         label: String,
-        textSizeSp: Float = 14f,
         onClick: () -> Unit,
     ): TextView = TextView(context).apply {
         text = label
         gravity = Gravity.CENTER
         includeFontPadding = false
         setTextColor(JvColors.text)
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, textSizeSp)
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
         background = roundedDrawable(JvColors.keyBg, dp(KEY_CORNER_DP))
         isClickable = true
         setOnClickListener {
