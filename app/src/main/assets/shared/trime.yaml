@@ -1018,7 +1018,7 @@ preset_keys:
   # 语音面板：整块键盘区切换成「点击说话」的语音面板（对标 Typeless）
   Voice: {label: 语音, command: voice_panel}
   VoiceBack: {label: 键盘, command: voice_back}
-  CommitAction: {label: enter_labels, command: commit_action} #底行动作键：组合中先上屏候选再执行动作
+  CommitAction: {label: enter_labels, command: commit_action} #底行动作键：组合中先确认拼写，再按一次才执行动作
 
 preset_keyboards:
   default:
@@ -1253,7 +1253,8 @@ preset_keyboards:
     - {click: 'm'}
     - {click: BackSpace, width: 15}
     # 第四排：只留 123 / 空格 / 动作键——对齐 Typeless。中英和语音已经收进顶栏胶囊。
-    # 动作键用 CommitAction 而不是 Return：组合中按 Return 会把原始拼音直接上屏。
+    # 动作键用 CommitAction：组合中第一下只确认拼写（下划线里的英文/编码原样上屏），
+    # 不选中文候选、也不触发搜索；组合结束后再按才执行宿主动作。
     - {click: Keyboard_symbols, long_click: Keyboard_number, width: 15}
     - {click: space, width: 70}
     - {click: CommitAction, width: 15}

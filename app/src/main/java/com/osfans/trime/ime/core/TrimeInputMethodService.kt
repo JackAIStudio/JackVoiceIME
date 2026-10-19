@@ -274,10 +274,6 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
                 if (!it.data.text.isNullOrEmpty()) {
                     commitText(it.data.text)
                 }
-                if (commitBeforeAction) {
-                    commitBeforeAction = false
-                    performEditorActionNow()
-                }
             }
 
             is RimeMessage.InlinePreeditMessage -> {
@@ -412,22 +408,20 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
         performEditorActionNow()
     }
 
-    /** 组合中按下动作键（前往 / 搜索 / 发送）时，等候选上屏后再执行动作。 */
-    private var commitBeforeAction = false
-
     /**
-     * 底行动作键。
+     * 底行动作键（前往 / 搜索 / 发送 / 完成）。
      *
-     * 不能直接走 Rime 的 Return：组合中它会把**原始拼音**上屏（「renke」而不是「认可」），
-     * 那正是「拼音粘成一坨」的来源之一。这里改成先把高亮候选选上屏，再执行宿主动作。
+     * 组合中（输入框里还有下划线）这一下只做「确认」，不执行宿主动作：
+     * 按 Rime 的 Return 语义把原始拼写原样上屏（`nihao` → `nihao`，英文/编码直接可用），
+     * 不替用户选中文候选。组合结束后再按一次，才真正搜索 / 前往。
+     * 这与 AgenBoard 的拼音确认一致：先把拼写交给用户，再决定要不要动作。
      */
-    fun commitCandidateAndAct() {
+    fun confirmCompositionAndAct() {
         if (!rime.run { statusCached }.isComposing) {
             performEditorActionNow()
             return
         }
-        commitBeforeAction = true
-        postRimeJob { selectCandidate(0, global = true) }
+        postRimeJob { processKey(RimeKeyMapping.RimeKey_Return, 0u) }
     }
 
     private fun performEditorActionNow() {
@@ -670,7 +664,6 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
         restarting: Boolean,
     ) {
         composingText = ""
-        commitBeforeAction = false
         justCommittedEnglishWord = null
         Timber.d("onStartInput: restarting=$restarting")
         val isNullType = attribute.inputType and InputType.TYPE_MASK_CLASS == InputType.TYPE_NULL

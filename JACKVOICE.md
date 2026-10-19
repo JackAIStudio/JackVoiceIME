@@ -82,7 +82,7 @@ q w e r t y u i o p        ← 按键
 | 英文候选（`EnglishCompleter`） | 不经过 Rime，**没人替它刷新**：切键盘时由 `KeyboardWindow.onAttached`、`ascii_mode` 变化时由 `onRimeOptionUpdated` 主动补候选；切语言前先 `clearCandidates()`，别让上一种语言的候选留在顶栏上 |
 | `commitEnglishSuggestion` | 删词干 + 提交整词要用 `beginBatchEdit/endBatchEdit` 包起来，并且**不要再 `clearEnglishSuggestions()`**——先清会把顶栏闪回「品牌 + 胶囊」，再点候选还可能吞字 |
 | `Rime.kt` 的 `inlinePreeditMode` | 强制 `COMPOSING_TEXT`：拼音字母直接进输入框；预编辑里的 `‸`(U+2038) 光标标记必须剥掉，不然会被当正文写进输入框 |
-| 主题 `CommitAction` 键 | 底行动作键。组合中先选高亮候选上屏，commit 到了再执行宿主 `imeOptions` 动作——**直接发 Return 会把原始拼音上屏** |
+| 主题 `CommitAction` 键 | 底行动作键。组合中第一下只做「确认」：把下划线里的原始拼写原样上屏（`nihao` → `nihao`），不选中文候选、也不触发搜索/前往；组合结束后再按才执行宿主 `imeOptions` 动作 |
 | 展开候选面板（`CandidatePanelView`） | Rime 一次只交 16 条（JNI `getBulkCandidates` 的 bulk 上限），滑到底要靠 `CandidatePages` 按**全量下标**用 `getCandidates(offset, limit)` 一批批要；点候选传的也是全量下标，别改成面板里的序号 |
 
 ## 外观与深色模式

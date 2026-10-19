@@ -184,8 +184,8 @@ class CommonKeyboardActionListener(override val di: DI) : DIAware {
                     "liquid_keyboard" -> handleLiquidKeyboard(arg)
                     "voice_panel" -> windowManager.attachWindow(voiceWindow)
                     "voice_back" -> windowManager.attachWindow(keyboardWindow)
-                    // 底行的动作键：组合中先把候选上屏，再执行宿主动作（见 TrimeInputMethodService）
-                    "commit_action" -> service.commitCandidateAndAct()
+                    // 底行的动作键：组合中先确认拼写上屏，再按一次才执行宿主动作
+                    "commit_action" -> service.confirmCompositionAndAct()
                     "menu_keyboard" -> windowManager.attachWindow(SwitchOptionWindow(di))
                     "clipboard_window" -> handleClipboardWindow(arg)
                     "set_color_scheme" -> handleColorScheme(arg)
