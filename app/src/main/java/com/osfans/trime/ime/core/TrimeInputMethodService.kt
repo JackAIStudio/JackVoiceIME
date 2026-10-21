@@ -1266,23 +1266,27 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
 
     internal fun updateComposingText(text: String) {
         val ic = currentInputConnection ?: return
+        // 宿主输入框（特别是桌面全局搜索 / 抽屉搜索）按拼音连续缩写匹配本地 App（如 pdd → 拼多多、jd → 京东、cl → Clock）。
+        // Rime 的 preedit 会在音节间插入分音空格（「p d d」、「j d」），导致搜索框将它们视为离散单词而无法命中应用。
+        // 因此送进输入框的预输入文本必须剥离分音空格，保持连续字符；气泡（ComposingBarView）仍保留原始分音以利人眼阅读。
+        val hostText = text.replace(" ", "")
         ic.beginBatchEdit()
-        if (composingText.isNotEmpty() || text.isNotEmpty()) {
+        if (composingText.isNotEmpty() || hostText.isNotEmpty()) {
             if (!ic.getSelectedText(0).isNullOrEmpty()) {
                 ic.deleteSurroundingText(1, 0)
             }
-            ic.setComposingText(text, 1)
-            if (text.isEmpty()) {
+            ic.setComposingText(hostText, 1)
+            if (hostText.isEmpty()) {
                 ic.finishComposingText()
             }
         }
-        composingText = text
-        // 顶栏左边那截拼写要跟输入框里的预编辑同步，所以从这条链路直接推过去，
-        // 不靠候选更新去猜（候选和预编辑是两条消息，赶不上一个节拍）。
+        composingText = hostText
+        // 顶栏左边那截拼写气泡显示带分音的拼写，方便人眼阅读；
+        // 输入框内则是无空格的连续预编辑（带下划线组合态）。
         inputView?.onComposingTextChanged(text)
         ic.endBatchEdit()
         // 这一轮拼写结束（选完候选 / 清空）：等着的语音结果现在可以插到光标处了。
-        if (text.isEmpty()) {
+        if (hostText.isEmpty()) {
             VoiceSession.onComposingEnded()
         }
     }

@@ -239,8 +239,10 @@ class InputView(
                     val isVoice = window === voiceWindow
                     voiceMode = isVoice
                     applyBarVisibility(isVoice)
-                    windowManager.view.updateLayoutParams {
-                        height = if (isVoice) voicePanelHeightPx else lastKeyboardHeightPx
+                    if (windowManager.view.layoutParams != null) {
+                        windowManager.view.updateLayoutParams {
+                            height = if (isVoice) voicePanelHeightPx else lastKeyboardHeightPx
+                        }
                     }
                     applyKeyboardViewHeight(isVoice)
                     if (isVoice) {
