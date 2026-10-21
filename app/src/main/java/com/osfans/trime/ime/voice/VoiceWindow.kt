@@ -14,6 +14,7 @@ import com.osfans.trime.ime.keyboard.KeyboardWindow
 import com.osfans.trime.ime.window.BoardWindow
 import com.osfans.trime.ime.window.BoardWindowManager
 import com.osfans.trime.ime.window.ResidentWindow
+import com.osfans.trime.util.AppUtils
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -65,6 +66,9 @@ class VoiceWindow(di: DI) :
         view.toolbar.onEnglishTap = {
             service.switchInputLanguage(true)
             switchToKeyboard(VoiceTab.English)
+        }
+        view.toolbar.onBrandTap = {
+            AppUtils.launchMainActivity(context)
         }
         // 顶栏最右一格「收起键盘」。语音面板和打字键盘各有一份顶栏，
         // 两边的回调都要接上——只在 KeyboardWindow 里接的话，语音面板上这颗键点了没反应。

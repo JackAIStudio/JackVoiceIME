@@ -46,7 +46,7 @@ object AppUtils {
     /** 键盘上的齿轮/更多都落到 JackVoice 自己的主界面，别再把用户甩进 Trime 原生设置。 */
     fun launchMainActivity(context: Context) {
         context.startActivity<com.osfans.trime.ui.jackvoice.JackVoiceActivity> {
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
     }
 

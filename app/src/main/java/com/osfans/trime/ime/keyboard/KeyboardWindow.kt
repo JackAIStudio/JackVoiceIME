@@ -44,6 +44,7 @@ import com.osfans.trime.ime.window.BoardWindow
 import com.osfans.trime.ime.window.BoardWindowManager
 import com.osfans.trime.ime.window.ResidentWindow
 import com.osfans.trime.ui.jackvoice.JvColors
+import com.osfans.trime.util.AppUtils
 import com.osfans.trime.util.isLandscape
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -211,6 +212,7 @@ class KeyboardWindow(di: DI) :
                     bar.setActive(VoiceTab.English)
                     VoicePrefs.setLastTab(context, VoiceTab.English)
                 }
+                bar.onBrandTap = { AppUtils.launchMainActivity(context) }
                 bar.onCandidatePick = { index -> pickCandidate(index) }
                 bar.onExpandTap = { toggleCandidatePanel() }
                 bar.onHideTap = { service.requestHideSelf(0) }

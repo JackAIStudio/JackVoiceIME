@@ -229,12 +229,6 @@ class InputView(
         val receivers: List<InputBroadcastReceiver> by allInstances()
         receivers.forEach { broadcaster.addReceiver(it) }
 
-        windowManager.cacheResidentWindow(keyboardWindow, createView = true)
-        windowManager.cacheResidentWindow(liquidWindow)
-        windowManager.cacheResidentWindow(voiceWindow, createView = true)
-        // show KeyboardWindow by default
-        windowManager.attachWindow(KeyboardWindow)
-
         // 语音面板占据整块键盘区时：
         //   ① 收起顶部的候选/工具条（对齐 Typeless 的干净画面，GONE 后 ConstraintLayout
         //      会把窗口区上提到父容器顶部）；
@@ -261,6 +255,12 @@ class InputView(
             },
         )
 
+        windowManager.cacheResidentWindow(keyboardWindow, createView = true)
+        windowManager.cacheResidentWindow(liquidWindow)
+        windowManager.cacheResidentWindow(voiceWindow, createView = true)
+        // show KeyboardWindow by default
+        windowManager.attachWindow(KeyboardWindow)
+
         keyboardBackground.imageDrawable = scope.drawable("keyboard_background")
 
         keyboardView =
@@ -273,7 +273,7 @@ class InputView(
                     },
                 )
                 add(
-                    inputBar.view,
+                    inputBar.view.apply { visibility = View.GONE },
                     lParams(matchParent, dp(inputBar.themedHeight)) {
                         topOfParent()
                         centerHorizontally()
@@ -359,6 +359,8 @@ class InputView(
                 centerInParent()
             },
         )
+
+        applyBarVisibility(isVoice = false)
     }
 
     private fun updateKeyboardSize() {

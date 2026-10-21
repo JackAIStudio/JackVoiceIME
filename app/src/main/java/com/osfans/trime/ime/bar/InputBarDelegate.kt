@@ -243,12 +243,8 @@ class InputBarDelegate(override val di: DI) :
 
     val view by lazy {
         ViewAnimator(context).apply {
-            visibility =
-                if (hideQuickBar) {
-                    View.GONE
-                } else {
-                    View.VISIBLE
-                }
+            // JackVoice 顶栏已整体移入 VoiceToolbarView，原独立候选/快捷栏默认隐藏
+            visibility = View.GONE
             background =
                 scope.decorDrawable(
                     "candidate_background",

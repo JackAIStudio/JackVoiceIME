@@ -21,6 +21,7 @@ import android.widget.TextView
 import com.osfans.trime.core.CandidateProto
 import com.osfans.trime.ime.keyboard.InputFeedbackManager
 import com.osfans.trime.ui.jackvoice.JvColors
+import com.osfans.trime.util.AppUtils
 
 /** 顶栏切换器里的几个位置。Hide 不是「语言」，只是收起键盘。 */
 enum class VoiceTab { Voice, Pinyin, English, Hide }
@@ -44,6 +45,8 @@ class VoiceToolbarView(
     var onPinyinTap: (() -> Unit)? = null
     var onEnglishTap: (() -> Unit)? = null
     var onHideTap: (() -> Unit)? = null
+    /** 点左侧品牌字样：打开应用主页面（默认调用 AppUtils.launchMainActivity）。 */
+    var onBrandTap: (() -> Unit)? = null
 
     /** 点候选词，参数是它在全量候选列表里的下标。 */
     var onCandidatePick: ((Int) -> Unit)? = null
@@ -64,6 +67,16 @@ class VoiceToolbarView(
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 17f)
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER_VERTICAL
+            isClickable = true
+            val out = TypedValue()
+            if (context.theme.resolveAttribute(android.R.attr.selectableItemBackgroundBorderless, out, true)) {
+                setBackgroundResource(out.resourceId)
+            }
+            setPadding(dp(4), 0, dp(12), 0)
+            setOnClickListener {
+                InputFeedbackManager.keyPressVibrate(this)
+                onBrandTap?.invoke() ?: AppUtils.launchMainActivity(context)
+            }
         }
 
     private val waveGlyph = WaveGlyphView(context)
@@ -180,7 +193,7 @@ class VoiceToolbarView(
             brand,
             LayoutParams(LayoutParams.WRAP_CONTENT, LayoutParams.MATCH_PARENT).apply {
                 gravity = Gravity.START or Gravity.CENTER_VERTICAL
-                marginStart = dp(18)
+                marginStart = dp(14)
             },
         )
         addView(
