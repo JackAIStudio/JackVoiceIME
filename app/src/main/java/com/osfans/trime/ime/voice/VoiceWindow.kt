@@ -191,7 +191,7 @@ class VoiceWindow(di: DI) :
             view.setRetrying(false)
             return
         }
-        view.setRetrying(marked != null)
+        view.setRetrying(marked != null, VoiceSession.retryProgress)
     }
 
     /** 有可重试的录音、且面板回到空闲时，把「重新识别这段录音」亮出来。 */
@@ -239,6 +239,7 @@ class VoiceWindow(di: DI) :
         val saved = VoicePrefs.engine(context)
         val effective = if (saved == AsrEngine.Local && ready) AsrEngine.Local else AsrEngine.Cloud
         if (saved != effective) VoicePrefs.setEngine(context, effective)
+        if (effective == AsrEngine.Local) LocalAsrEngine.preload(LocalModelManager.modelDir(context))
         panel?.setEngine(effective)
     }
 
@@ -255,6 +256,7 @@ class VoiceWindow(di: DI) :
             AsrEngine.Cloud -> {
                 if (LocalModelManager.isReady(context)) {
                     VoicePrefs.setEngine(context, AsrEngine.Local)
+                    LocalAsrEngine.preload(LocalModelManager.modelDir(context))
                     panel?.setEngine(AsrEngine.Local)
                     panel?.showMessage("已切到本地识别")
                 } else {

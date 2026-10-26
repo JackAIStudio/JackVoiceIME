@@ -13,6 +13,7 @@ import com.k2fsa.sherpa.onnx.OnlineStream
 import com.k2fsa.sherpa.onnx.OnlineTransducerModelConfig
 import timber.log.Timber
 import java.io.File
+import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.LinkedBlockingQueue
@@ -177,23 +178,66 @@ object LocalAsrEngine {
     }
 
     /**
-     * 把一段已经落盘的 PCM 一次性转成文字，给历史里的「重新识别」用。
+     * 把一段已经落盘的 PCM 转成文字，给历史里的「重新识别」用。
      *
-     * 和实时那条流共用同一个 recognizer，但不共用 stream；[Synchronized]
+     * [pcm] 为空时从 [pcmFile] 按块流式读，避免 4 分钟录音整段进内存；
+     * 两者都只用于重识别，不和实时听写共用 stream。[Synchronized]
      * 保证不会和正在跑的实时听写抢同一个 native 对象。
+     *
+     * @param onProgress 已处理的 PCM 字节数 / 总字节数（0..1），用于 UI 进度
+     * @param isCancelled 返回 true 时提前收尾，不再解码
      */
     @Synchronized
-    fun transcribe(modelDir: File, pcm: ByteArray): String {
+    fun transcribe(
+        modelDir: File,
+        pcm: ByteArray = ByteArray(0),
+        pcmFile: File? = null,
+        onProgress: ((Float) -> Unit)? = null,
+        isCancelled: (() -> Boolean)? = null,
+    ): String {
         val recognizer = get(modelDir)
         val stream = recognizer.createStream()
+        var readCancelled = false
         try {
-            var offset = 0
-            while (offset < pcm.size) {
-                val n = minOf(3200, pcm.size - offset)
-                stream.acceptWaveform(pcmToFloat(pcm, offset, n), 16_000)
+            var processed = 0L
+            val totalBytes =
+                when {
+                    pcm.isNotEmpty() -> pcm.size.toLong()
+                    pcmFile != null && pcmFile.isFile -> (pcmFile.length() - 44).coerceAtLeast(0)
+                    else -> 0L
+                }
+            fun feed(block: ByteArray): Boolean {
+                if (isCancelled?.invoke() == true) return false
+                stream.acceptWaveform(pcmToFloat(block), 16_000)
                 while (recognizer.isReady(stream)) recognizer.decode(stream)
-                offset += n
+                processed += block.size
+                if (totalBytes > 0) onProgress?.invoke((processed.toFloat() / totalBytes).coerceIn(0f, 1f))
+                return true
             }
+            if (pcm.isNotEmpty()) {
+                var offset = 0
+                while (offset < pcm.size) {
+                    val n = minOf(3_200, pcm.size - offset)
+                    if (!feed(pcm.copyOfRange(offset, offset + n))) return ""
+                    offset += n
+                }
+            } else if (pcmFile != null) {
+                // 直接读 WAV 文件，跳过 44 字节头；不再经 VoiceAudio 的 Context 路径，
+                // 重识别拿到的就是 entry.fileName 对应的绝对文件。
+                val recognized =
+                    readFileInBlocks(pcmFile) { block ->
+                        if (!feed(block)) {
+                            readCancelled = true
+                            false
+                        } else {
+                            true
+                        }
+                    }
+                if (!recognized || readCancelled) return ""
+            } else {
+                return ""
+            }
+            if (isCancelled?.invoke() == true) return ""
             stream.inputFinished()
             while (recognizer.isReady(stream)) recognizer.decode(stream)
             return recognizer.getResult(stream).text.trim()
@@ -201,6 +245,31 @@ object LocalAsrEngine {
             runCatching { stream.release() }
         }
     }
+
+    private fun readFileInBlocks(
+        file: File,
+        onBlock: (ByteArray) -> Boolean,
+    ): Boolean =
+        runCatching {
+            FileInputStream(file).use { input ->
+                var skipped = 0L
+                while (skipped < 44) {
+                    val n = input.skip(44 - skipped)
+                    if (n <= 0) return false
+                    skipped += n
+                }
+                val buffer = ByteArray(3_200)
+                while (true) {
+                    val n = input.read(buffer)
+                    if (n < 0) return true
+                    if (n == 0) continue
+                    val block = if (n == buffer.size) buffer.copyOf() else buffer.copyOf(n)
+                    if (!onBlock(block)) return true
+                }
+                @Suppress("UNREACHABLE_CODE")
+                true
+            }
+        }.getOrDefault(false)
 
     fun pcmToFloat(
         pcm: ByteArray,
@@ -211,6 +280,11 @@ object LocalAsrEngine {
         val out = FloatArray(shorts.remaining())
         for (i in out.indices) out[i] = shorts.get(i) / 32768f
         return out
+    }
+
+    /** 切到本地时先预热，别让用户开口后才开始加载 2–3 秒。 */
+    fun preload(modelDir: File) {
+        Thread({ runCatching { get(modelDir) } }, "jackvoice-local-preload").start()
     }
 
     @Synchronized

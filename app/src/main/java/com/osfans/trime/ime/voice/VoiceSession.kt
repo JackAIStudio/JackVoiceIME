@@ -146,6 +146,11 @@ object VoiceSession : VoiceEngine.Listener {
     var retryingEntryId: String? = null
         private set
 
+    /** 本地重识别进度 0..1；云端没有分片进度，保持 0。 */
+    @Volatile
+    var retryProgress: Float = 0f
+        private set
+
     /** 重新识别的 UI 看门狗：到点还没回调就主动收掉，别让面板一直转。 */
     private var retryWatchdog: Runnable? = null
 
@@ -430,6 +435,17 @@ object VoiceSession : VoiceEngine.Listener {
     }
 
     /**
+     * 输入法收起：本地模型释放内存。
+     *
+     * 只在**没有**在录音 / 等终稿 / 重识别时做；否则会把正在跑的任务的 recognizer 抽走。
+     */
+    fun onImeHidden() {
+        if (state != VoiceState.Idle || retryingEntryId != null) return
+        LocalAsrEngine.close()
+        retryProgress = 0f
+    }
+
+    /**
      * 用户点「取消」或 UI 看门狗到点：立刻把界面从「正在重新识别…」里拉出来。
      *
      * 不能只依赖 [VoiceTranscriber] 的回调——它可能在等一个永远不来的 WebSocket
@@ -439,6 +455,7 @@ object VoiceSession : VoiceEngine.Listener {
         val id = retryingEntryId ?: return
         disarmRetryWatchdog()
         retryingEntryId = null
+        retryProgress = 0f
         inMemoryRetryId = id
         runCatching { VoiceTranscriber.cancel() }
         notifyState()
@@ -452,6 +469,7 @@ object VoiceSession : VoiceEngine.Listener {
                 if (retryingEntryId != entryId) return@Runnable
                 Timber.w("重新识别看门狗触发，界面强制恢复：$entryId")
                 retryingEntryId = null
+                retryProgress = 0f
                 inMemoryRetryId = entryId
                 runCatching { VoiceTranscriber.cancel() }
                 notifyState()
@@ -493,7 +511,18 @@ object VoiceSession : VoiceEngine.Listener {
                 svc,
                 entryId,
                 object : VoiceTranscriber.Callback {
-                    // 回调来自 OkHttp 线程：状态、上屏、通知都得回主线程再动。
+                    // 回调来自 OkHttp / 本地解码线程：状态、上屏、通知都得回主线程再动。
+                    override fun onProgress(
+                        entryId: String,
+                        progress: Float,
+                    ) {
+                        post {
+                            if (retryingEntryId != entryId) return@post
+                            retryProgress = progress
+                            notifyState()
+                        }
+                    }
+
                     override fun onDone(
                         entryId: String,
                         text: String,
@@ -505,6 +534,7 @@ object VoiceSession : VoiceEngine.Listener {
                             // 补出来了就不再挂着那个按钮。
                             if (inMemoryRetryId == entryId) inMemoryRetryId = null
                             retryingEntryId = null
+                            retryProgress = 0f
                             VoiceHistory.markCompleted(svc, entryId, text, 0L)
                             // 文字已经进记录了，用户随时能在历史页看到；
                             // 这里只是把「要不要现在插进输入框」交还给他。
@@ -523,6 +553,7 @@ object VoiceSession : VoiceEngine.Listener {
                             if (retryingEntryId != entryId) return@post
                             disarmRetryWatchdog()
                             retryingEntryId = null
+                            retryProgress = 0f
                             // 写进记录时要**如实**分状态。
                             //
                             // 这里原来一律写 Status.Empty（「没听到人声」）。可 Empty 在
@@ -556,6 +587,7 @@ object VoiceSession : VoiceEngine.Listener {
             )
         if (started) {
             retryingEntryId = entryId
+            retryProgress = 0f
             armRetryWatchdog(entryId)
             val entry = runCatching { VoiceHistory.find(svc, entryId) }.getOrNull()
             val whenText =

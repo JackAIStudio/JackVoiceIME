@@ -195,7 +195,7 @@ object VoiceAudio {
         return recovered
     }
 
-    /** 读回 PCM（跳过 WAV 头），给重新识别用。 */
+    /** 读回 PCM（跳过 WAV 头），给重新识别用。短录音仍可整段读。 */
     fun readPcm(
         ctx: Context,
         fileName: String,

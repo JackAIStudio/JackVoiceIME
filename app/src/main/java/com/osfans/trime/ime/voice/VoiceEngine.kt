@@ -183,6 +183,8 @@ object VoiceEngine {
             post { listener?.onError("本地模型还没下载好，先在键盘上点「本地」下载") }
             return false
         }
+        // 点「本地」时已经预热过一次；这里再调只是兜底，已加载时几乎无开销。
+        if (selected == AsrEngine.Local) LocalAsrEngine.preload(LocalModelManager.modelDir(ctx))
 
         result.setLength(0)
         stopped.set(false)

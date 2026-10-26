@@ -9,6 +9,7 @@ import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import timber.log.Timber
+import java.io.File
 
 /**
  * 把**已经存在本地的那段录音**重新送进识别，补出文字。
@@ -24,6 +25,12 @@ import timber.log.Timber
  */
 object VoiceTranscriber {
     interface Callback {
+        /** 本地重识别的解码进度（0..1）；云端没有分片进度，不会回调。 */
+        fun onProgress(
+            entryId: String,
+            progress: Float,
+        ) = Unit
+
         fun onDone(
             entryId: String,
             text: String,
@@ -63,9 +70,9 @@ object VoiceTranscriber {
         entryId: String,
         callback: Callback,
     ): Boolean {
-        if (job != null) {
+        if (job != null || localJob != null) {
             // 说清楚是哪一条，别让用户对着「另一段录音」猜。
-            val busy = job?.entryId
+            val busy = job?.entryId ?: localJob?.entryId
             val busyEntry = busy?.let { runCatching { VoiceHistory.find(ctx, it) }.getOrNull() }
             val at =
                 busyEntry?.let {
@@ -85,8 +92,8 @@ object VoiceTranscriber {
             callback.onFailed(entryId, "这条记录没有可用的录音", retryable = false)
             return false
         }
-        val pcm = VoiceAudio.readPcm(ctx, entry.fileName!!)
-        if (pcm == null || pcm.isEmpty()) {
+        val audioFile = VoiceAudio.file(ctx, entry.fileName!!)
+        if (audioFile == null || !audioFile.isFile || audioFile.length() <= 44) {
             callback.onFailed(entryId, "录音文件读不出来", retryable = false)
             return false
         }
@@ -95,10 +102,22 @@ object VoiceTranscriber {
                 callback.onFailed(entryId, "本地模型还没下载好", retryable = false)
                 return false
             }
-            localJob = LocalJob(ctx.applicationContext, entryId, pcm, callback)
+            localJob =
+                LocalJob(
+                    ctx = ctx.applicationContext,
+                    entryId = entryId,
+                    audioFile = audioFile,
+                    durationMs = entry.durationMs,
+                    callback = callback,
+                )
             busyEntryId = entryId
             localJob?.start()
             return true
+        }
+        val pcm = VoiceAudio.readPcm(ctx, entry.fileName!!)
+        if (pcm == null || pcm.isEmpty()) {
+            callback.onFailed(entryId, "录音文件读不出来", retryable = false)
+            return false
         }
         val key = VoicePrefs.apiKey(ctx)
         if (key.isBlank()) {
@@ -284,20 +303,35 @@ object VoiceTranscriber {
     private class LocalJob(
         private val ctx: Context,
         val entryId: String,
-        private val pcm: ByteArray,
+        private val audioFile: File,
+        private val durationMs: Long,
         private val callback: Callback,
     ) {
+        @Volatile
         private var done = false
         private val worker = Thread({ run() }, "jackvoice-local-retranscribe")
+
+        /** 按音频时长给足余量：4 分钟录音不能再用固定 30 秒一刀切。 */
+        private val timeoutMs = (durationMs * 2 + 15_000L).coerceAtLeast(LOCAL_TIMEOUT_MS)
         private val timeout = Runnable { fail("本地重新识别超时，请稍后再试") }
 
         fun start() {
             worker.start()
-            main.postDelayed(timeout, LOCAL_TIMEOUT_MS)
+            main.postDelayed(timeout, timeoutMs)
         }
 
         private fun run() {
-            val result = runCatching { LocalAsrEngine.transcribe(LocalModelManager.modelDir(ctx), pcm) }
+            val result =
+                runCatching {
+                    LocalAsrEngine.transcribe(
+                        modelDir = LocalModelManager.modelDir(ctx),
+                        pcmFile = audioFile,
+                        onProgress = { progress ->
+                            main.post { if (!done) callback.onProgress(entryId, progress) }
+                        },
+                        isCancelled = { done },
+                    )
+                }
             main.post {
                 if (done) return@post
                 done = true
@@ -371,6 +405,6 @@ object VoiceTranscriber {
     /** 整段回放的上限。一分钟的录音通常几秒就出结果。 */
     private const val TIMEOUT_MS = 60_000L
 
-    /** 本地重识别的上限；超时后界面必须能恢复，不能一直转。 */
+    /** 本地重识别的最短看门狗；长录音按 durationMs 放宽。 */
     private const val LOCAL_TIMEOUT_MS = 30_000L
 }

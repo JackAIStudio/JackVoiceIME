@@ -94,6 +94,7 @@ class VoicePanelView(
             setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
             gravity = Gravity.CENTER
             includeFontPadding = false
+            setTextColor(JvColors.text)
             background = roundedDrawable(JvColors.keyBg, dp(16))
             isClickable = true
             setOnClickListener {
@@ -662,10 +663,19 @@ class VoicePanelView(
     }
 
     /** 正在重新识别：面板上给一句进度，而不是让用户对着「点击说话」等。 */
-    fun setRetrying(busy: Boolean) {
+    fun setRetrying(
+        busy: Boolean,
+        progress: Float = 0f,
+    ) {
         if (state != VoiceState.Idle) return
         retryingView.visibility = if (busy) VISIBLE else GONE
         retryCancelView.visibility = if (busy) VISIBLE else GONE
+        retryingView.text =
+            when {
+                !busy -> "正在重新识别…"
+                progress > 0f -> "正在重新识别 ${(progress * 100).toInt().coerceIn(0, 100)}%"
+                else -> "正在重新识别…"
+            }
         if (busy) {
             // 跑的时候把麦克风、提示、底栏都让开，只留进度。
             statusView.visibility = GONE

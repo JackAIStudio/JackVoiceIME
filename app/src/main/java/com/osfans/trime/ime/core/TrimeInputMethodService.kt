@@ -727,6 +727,8 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
 
     override fun onFinishInputView(finishingInput: Boolean) {
         Timber.d("onFinishInputView: finishingInput=$finishingInput")
+        // 键盘收起后本地模型没有继续驻留的必要；下次展开/切本地会重新预热。
+        VoiceSession.onImeHidden()
         decorLocationUpdated = false
         inputView?.dismissCandidateActionMenu()
         candidatesView?.dismissCandidateActionMenu()
