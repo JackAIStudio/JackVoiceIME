@@ -77,6 +77,10 @@ object VoiceHistory {
          *
          * [Status.Empty] 排除在外——服务端已经明确说这段里没人说话，
          * 再点几次也一样，按钮一直亮着只会骗用户点。
+         *
+         * 注意 [Status.Empty] **只能由「服务端说没人说话」产生**。
+         * 以前重新识别失败时不管什么原因都写 Empty，一次断网就把整条录音
+         * 永久判死（按钮再也不出现），这是真踩过的坑。
          */
         val canRetry: Boolean
             get() = hasAudio &&
@@ -94,6 +98,40 @@ object VoiceHistory {
 
     private const val FILE_NAME = "voice_history.json"
     private const val MAX_ENTRIES = 500
+
+    /**
+     * 一次「重新识别」失败之后，这条记录该记成什么状态。
+     *
+     * 判据是**这段声音还值不值得再试**，不是这次为什么失败：
+     *
+     * | 情况 | 状态 | 按钮 |
+     * |---|---|---|
+     * | 服务端说这段没人说话 | [Status.Empty] | 收起——再点也是白点 |
+     * | 网络类 / 连接被掐 / 超时 | [Status.NoNetwork] | 留着——声音在，稍后再试 |
+     * | 其余（服务端报错等） | [Status.Failed] | 留着 |
+     *
+     * **只有 Empty 会让按钮消失。** 语音面板和历史页都走这一个判断，
+     * 别再各写一份 if——两处不一致正是之前按钮时而消失的原因。
+     *
+     * @param retryable 调用方认为「稍后还能再试」。它只影响网络类的归类，
+     *                  不会把一个有声音的条目变成 Empty。
+     */
+    fun statusAfterRetryFailure(
+        message: String,
+        retryable: Boolean,
+    ): Status =
+        when {
+            // 「没听到人声」是唯一该收掉按钮的理由，而且必须是服务端下的结论。
+            isNoSpeech(message) -> Status.Empty
+            VoiceFailure.isNetwork(message) -> Status.NoNetwork
+            retryable -> Status.NoNetwork
+            else -> Status.Failed
+        }
+
+    private fun isNoSpeech(message: String): Boolean =
+        message.contains("没听到人声") ||
+            message.contains("没有人说话") ||
+            message.contains("没听到声音")
 
     private val cache = CopyOnWriteArrayList<Entry>()
 
@@ -302,10 +340,26 @@ object VoiceHistory {
         loaded = true
         val f = file(ctx)
         if (!f.exists()) return
+        var repaired = false
         runCatching {
             val arr = JSONArray(f.readText())
             for (i in 0 until arr.length()) {
                 val o = arr.getJSONObject(i)
+                val stored = Status.entries.firstOrNull { it.id == o.optString("status") } ?: Status.Completed
+                val error = o.optString("error")
+                // 修一批被误判成 Empty 的老记录。
+                //
+                // 以前「重新识别失败」不管什么原因都写 Empty，而 Empty 会让重试按钮
+                // 永久消失。这里在读取时把「其实是网络问题」的那些改回来：
+                // 音频还在、错误是网络类 → NoNetwork，按钮就重新出现。
+                // 只动确实能判定的（错误串明确是网络类），其余原样保留。
+                val status =
+                    if (stored == Status.Empty && error.isNotBlank() && VoiceFailure.isNetwork(error)) {
+                        repaired = true
+                        Status.NoNetwork
+                    } else {
+                        stored
+                    }
                 cache.add(
                     Entry(
                         id = o.optString("id").ifBlank { UUID.randomUUID().toString() },
@@ -314,13 +368,17 @@ object VoiceHistory {
                         durationMs = o.optLong("dur"),
                         fileName = o.optString("audio").takeIf { it.isNotBlank() },
                         // 老记录没有这两个字段：那时只有成功上屏的才会进历史。
-                        status = Status.entries.firstOrNull { it.id == o.optString("status") } ?: Status.Completed,
-                        error = o.optString("error"),
+                        status = status,
+                        error = error,
                         retryCount = o.optInt("retry"),
                     ),
                 )
             }
         }.onFailure { Timber.w(it, "读取听写历史失败") }
+        if (repaired) {
+            Timber.i("修正了被误判为「没听到人声」的历史记录")
+            persist(ctx)
+        }
     }
 
     private fun persist(ctx: Context) {

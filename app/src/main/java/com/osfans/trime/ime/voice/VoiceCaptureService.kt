@@ -41,6 +41,15 @@ import timber.log.Timber
  * 起和停都必须成对出现在会话里（[VoiceSession.start] / [VoiceSession.finishCapture]）。
  * 别处再单开一个 start 就会重演「通知栏永远挂着正在聆听」那个 bug：
  * 两次 start/stop 是异步排队进 AMS 的，先后顺序不由调用方决定。
+ *
+ * ## 收摊时必须显式摘掉前台
+ *
+ * 这是个坑：`NotificationManager.cancel()` 撤不掉**前台服务自己的**那条通知。
+ * 只要服务还是前台状态，通知就由 AMS 托着，只有 `stopForeground(STOP_FOREGROUND_REMOVE)`
+ * 才真的把它从通知栏拿走。以前 [stop] 只做了 cancel + stopService，
+ * 服务一旦没被及时销毁（迟到/重复的 start、ROM 不肯立刻回收），
+ * 那条「正在聆听」就永远停在通知栏里，用户下拉一看以为还在听。
+ * 现在 [onDestroy] 和 [stop] 都显式摘，两条路任走其一都能清干净。
  */
 class VoiceCaptureService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
@@ -143,7 +152,14 @@ class VoiceCaptureService : Service() {
     }
 
     private fun hint(): String = when (VoiceSession.state) {
-        VoiceState.Recording -> getString(R.string.voice_listening_hint)
+        // 没网时这一轮只录音、不出字：通知栏也要说清，否则用户以为字还会出来。
+        VoiceState.Recording ->
+            if (VoiceSession.asrDegraded) {
+                getString(R.string.voice_listening_offline_hint)
+            } else {
+                getString(R.string.voice_listening_hint)
+            }
+
         VoiceState.Thinking -> getString(R.string.voice_thinking_hint)
         VoiceState.Idle -> getString(R.string.voice_listening_hint)
     }
@@ -167,7 +183,18 @@ class VoiceCaptureService : Service() {
     override fun onDestroy() {
         if (running === this) running = null
         VoiceEngine.stopRecording()
+        // 显式摘掉前台：只 cancel 通知是没用的，前台服务那条由 AMS 托着，
+        // 不 stopForeground 就会一直留在通知栏里。
+        dropForeground()
         super.onDestroy()
+    }
+
+    /** 把服务从通知栏里彻底摘掉。撤不掉的写法只有一种：只 cancel、不 stopForeground。 */
+    private fun dropForeground() {
+        runCatching {
+            ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+        }
+        runCatching { notificationManager(this)?.cancel(NOTIFICATION_ID) }
     }
 
     companion object {
@@ -194,8 +221,17 @@ class VoiceCaptureService : Service() {
         }
 
         fun stop(ctx: Context) {
-            // 先撤掉通知：stopService 是异步的，麦克风可能还要几十毫秒才真正松开，
+            // 先摘前台再停服务：`stopService` 是异步的，麦克风可能还要几十毫秒才真正松开，
             // 但「正在聆听」这几个字不该再留在通知栏里。
+            //
+            // 这里必须显式 `stopForeground`：只 `cancel` 通知对前台服务无效——
+            // 只要它还是前台，通知就由 AMS 托着。用户截图里那条一直不走的
+            // 「正在聆听」就是这么来的。
+            running?.let { svc ->
+                runCatching {
+                    ServiceCompat.stopForeground(svc, ServiceCompat.STOP_FOREGROUND_REMOVE)
+                }
+            }
             runCatching { notificationManager(ctx)?.cancel(NOTIFICATION_ID) }
             runCatching { ctx.stopService(Intent(ctx, VoiceCaptureService::class.java)) }
         }
@@ -208,7 +244,8 @@ class VoiceCaptureService : Service() {
         fun refresh() {
             val svc = running ?: return
             if (!VoiceSession.isCapturing()) {
-                runCatching { notificationManager(svc)?.cancel(NOTIFICATION_ID) }
+                // 会话已经结束：连前台一起摘，别只撤通知。
+                svc.dropForeground()
                 return
             }
             runCatching {

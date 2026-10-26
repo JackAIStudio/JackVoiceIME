@@ -28,6 +28,26 @@ import java.util.concurrent.atomic.AtomicBoolean
  * 每一块音频既喂给流式识别，也**同时写进本地 WAV**（[VoiceAudio]）。
  * 网络断了、终稿没等到、进程被回收，声音都还在，用户能重来。
  * 写盘失败不会拖累识别——最多这一轮没存上，日志里有记录。
+ *
+ * ## 识别会断，录音不会
+ *
+ * 这是这一层最要紧的约定：**麦克风与网络解耦**。
+ *
+ * 以前识别连接一失败就走 [finishWithError]，顺手把录音也收了——用户正说着话，
+ * 地铁进隧道、VPN 抖一下，屏幕直接弹「识别失败：connection closed」，
+ * 后面说的话一个字都没录下来，连重试的音频都没有。这完全说不过去：
+ * 麦克风是本地的，网络是外部的，外部的坏了不该把本地的也停掉。
+ *
+ * 现在连接断掉只做一件事：把 [asr] 置空、记下 [asrError]，**录音继续**。
+ * 停止时如果一遍结果都没有，就走「先存着，回头再识别」：
+ *
+ * ```
+ * 连接断了 / 一开始就没网 → 录音照常 → 停下 → 音频落盘 → 历史里留一条可重试的记录
+ *                                              → 用户点刷新键 / 历史页「重新转写」
+ * ```
+ *
+ * 只有麦克风本身坏了（[VoiceRecorder] 报错）才真的结束这一轮——那种情况下
+ * 也没有音频可以留。
  */
 object VoiceEngine {
     interface Listener {
@@ -52,6 +72,25 @@ object VoiceEngine {
             entryId: String,
             message: String,
         ) {}
+
+        /**
+         * 识别这条线断了（断网 / 连接被掐），**但录音还在继续**。
+         *
+         * 这不是失败提示，是状态变化：界面上那句「正在聆听」得换成
+         * 「先录着，稍后识别」，否则用户以为字还会出来。
+         *
+         * @param message 断开的原因，已经是可以直接看的措辞
+         */
+        fun onAsrDegraded(message: String) {}
+    }
+
+    /** 一轮听写的来路。决定界面上该说「正在听」还是「先录着」。 */
+    enum class Mode {
+        /** 连上了识别服务，边说边出字。 */
+        Online,
+
+        /** 没有网，或者连接中途断了：**只录音**，停下之后再识别。 */
+        Offline,
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -79,6 +118,20 @@ object VoiceEngine {
 
     /** 停止录音时收尾出来的 WAV，等终稿到了再挂到记录上。 */
     private var stoppedArtifact: VoiceAudio.Artifact? = null
+
+    /**
+     * 识别连接断掉的原因。非空表示这一轮**只录了音、没有识别**。
+     *
+     * 连接断掉时录音照旧，这个字段就是「停下来之后该怎么收尾」的依据：
+     * 一遍结果都没有的话，音频直接进历史、留成可重试，而不是当成功收场。
+     */
+    @Volatile
+    private var asrError: String? = null
+
+    /** 这一轮的来路：连上了识别服务，还是一开始就没网。界面据此换提示语。 */
+    @Volatile
+    var mode: Mode = Mode.Online
+        private set
 
     @Volatile
     var isRecording = false
@@ -122,6 +175,7 @@ object VoiceEngine {
         isWaitingFinal = false
         stoppedArtifact = null
         failedEntryId = ""
+        asrError = null
 
         // 先落一条空记录：这样即使下面建连就崩了，历史里也有这条「说过的话」。
         entryId =
@@ -133,52 +187,67 @@ object VoiceEngine {
                 .takeIf { it.isNotEmpty() }
                 ?.let { VoiceAudio.create(ctx, it) }
 
-        val client =
-            VolcAsrClient(
-                VolcAsrClient.Config(
-                    apiKey = key,
-                    resourceId = VoicePrefs.resourceId(ctx),
-                    hotwords = if (VoicePrefs.hotwordsEnabled(ctx)) VoiceDictionary.hotwords(ctx) else emptyList(),
-                    boostingTableId = if (VoicePrefs.hotwordsEnabled(ctx)) VoicePrefs.boostingTableId(ctx) else "",
-                ),
-                object : VolcAsrClient.Listener {
-                    override fun onPartial(text: String) {
-                        result.setLength(0)
-                        result.append(text)
-                        post { listener?.onPartial(text) }
-                    }
+        // 没网就别建连了：建也是白等十秒超时，而这十秒里用户说的话会一句不剩。
+        // 直接进「先录着」，停下之后再走重新识别那条路。
+        val online = VoiceNetwork.isOnline(ctx)
+        mode = if (online) Mode.Online else Mode.Offline
+        if (!online) {
+            Log.i(TAG, "当前没有网络：先录音，停止后再识别")
+            asrError = "网络没连上"
+        }
 
-                    override fun onFinal(text: String) {
-                        Log.i(TAG, "服务端终稿到达：${text.length} 字，停止后 ${elapsedSinceStop()}ms")
-                        if (text.isNotEmpty()) {
+        val client =
+            if (online) {
+                VolcAsrClient(
+                    VolcAsrClient.Config(
+                        apiKey = key,
+                        resourceId = VoicePrefs.resourceId(ctx),
+                        hotwords = if (VoicePrefs.hotwordsEnabled(ctx)) VoiceDictionary.hotwords(ctx) else emptyList(),
+                        boostingTableId = if (VoicePrefs.hotwordsEnabled(ctx)) VoicePrefs.boostingTableId(ctx) else "",
+                    ),
+                    object : VolcAsrClient.Listener {
+                        override fun onPartial(text: String) {
                             result.setLength(0)
                             result.append(text)
+                            post { listener?.onPartial(text) }
                         }
-                        finish(fromTimeout = false)
-                    }
 
-                    override fun onError(message: String) {
-                        Timber.e("语音识别失败: $message")
-                        finishWithError(message)
-                    }
+                        override fun onFinal(text: String) {
+                            Log.i(TAG, "服务端终稿到达：${text.length} 字，停止后 ${elapsedSinceStop()}ms")
+                            if (text.isNotEmpty()) {
+                                result.setLength(0)
+                                result.append(text)
+                            }
+                            finish(fromTimeout = false)
+                        }
 
-                    override fun onClosed() = Unit
-                },
-            )
+                        override fun onError(message: String) {
+                            // 识别出错**不等于录音出错**：麦克风照旧，
+                            // 这里只记下来，收尾时决定这段音频怎么安置。
+                            onAsrBroken(message)
+                        }
+
+                        override fun onClosed() = Unit
+                    },
+                )
+            } else {
+                null
+            }
         asr = client
-        client.start()
+        client?.start()
 
         val rec =
             VoiceRecorder(
                 onChunk = {
                     audio?.write(it)
-                    client.feed(it)
+                    client?.feed(it)
                 },
+                // 麦克风自己坏了才是真的没法继续：这一轮到此为止。
                 onError = { finishWithError(it) },
                 onLevel = { level -> post { listener?.onLevel(level) } },
             )
         if (!rec.start()) {
-            client.cancel()
+            client?.cancel()
             asr = null
             // 麦克风没起来，这条等于什么都没录到：别在历史里留空壳。
             discardCurrentEntry(ctx)
@@ -189,6 +258,27 @@ object VoiceEngine {
         isRecording = true
         startedAt = System.currentTimeMillis()
         return true
+    }
+
+    /**
+     * 识别这条线断了：**只把识别停掉，录音继续**。
+     *
+     * 断网、VPN 抖一下、服务端掐连接，都走这里。用户可能还在说话，
+     * 这段声音仍然要完整地留在本机，停下之后再识别。
+     */
+    private fun onAsrBroken(message: String) {
+        if (asr == null && asrError != null) return
+        Timber.w("识别连接断了，录音继续：$message")
+        asrError = message
+        mode = Mode.Offline
+        val broken = asr
+        asr = null
+        runCatching { broken?.cancel() }
+        // 界面上要看得出来「它还在录，只是暂时不出字」，而不是停在旧预览上。
+        post {
+            listener?.onPartial("")
+            listener?.onAsrDegraded(message)
+        }
     }
 
     /** 停止录音、发结束包，等服务端二遍终稿。等不到就用一遍结果兜底。 */
@@ -222,6 +312,13 @@ object VoiceEngine {
             Log.i(TAG, "录音已存：${artifact.fileName}（${artifact.durationMs}ms）")
         }
         runCatching { asr?.stop() }
+        // 没有识别连接（一开始就没网，或者中途断了）：不必等一个不会来的终稿，
+        // 直接把这段录音安置成「可重试」。等下去只会让面板空转三秒。
+        if (asr == null && asrError != null) {
+            Log.i(TAG, "本轮没有识别连接，直接收尾：$asrError")
+            finish(fromTimeout = true)
+            return
+        }
         // 停录这一刻波形就该落地，别等终稿或超时。
         post { listener?.onLevel(0f) }
     }
@@ -247,6 +344,9 @@ object VoiceEngine {
     /**
      * 唯一出口。上屏文本可能是服务端终稿，也可能是 3 秒超时后用一遍结果兜底——
      * 两者行为完全一样，只有日志能区分，所以 [fromTimeout] 必须记下来。
+     *
+     * 还有一种情况也走这里：**从头到尾就没有识别连接**（没网 / 中途断了）。
+     * 那时 [result] 是空的，音频却完整，于是被 [archive] 安置成可重试的记录。
      */
     private fun finish(fromTimeout: Boolean) {
         if (!stopped.compareAndSet(false, true)) {
@@ -255,6 +355,7 @@ object VoiceEngine {
         }
         main.removeCallbacksAndMessages(null)
         val raw = result.toString()
+        val asrFailure = asrError
         isRecording = false
         isWaitingFinal = false
         recorder?.stop()
@@ -264,9 +365,9 @@ object VoiceEngine {
         result.setLength(0)
         val artifact = closedArtifact()
         val text = raw.trim()
-        val mode = VoicePrefs.punctuationMode(appContext)
+        val punctuationMode = VoicePrefs.punctuationMode(appContext)
         val processed = runCatching { PostProcessor.process(text, appContext) }.getOrDefault(text)
-        val finalText = runCatching { PunctuationProcessor.apply(processed, mode) }.getOrDefault(processed)
+        val finalText = runCatching { PunctuationProcessor.apply(processed, punctuationMode) }.getOrDefault(processed)
         val waited = elapsedSinceStop()
         stopAt = 0L
         val duration = if (startedAt > 0) System.currentTimeMillis() - startedAt else artifact?.durationMs ?: 0L
@@ -277,20 +378,30 @@ object VoiceEngine {
             Log.i(TAG, "终稿上屏：${text.length} 字，停止后 ${waited}ms")
         }
         if (finalText != text) {
-            Log.i(TAG, "标点处理（${mode.label}）：${text.length} → ${finalText.length} 字")
+            Log.i(TAG, "标点处理（${punctuationMode.label}）：${text.length} → ${finalText.length} 字")
         }
-        archive(artifact, finalText, duration, fromTimeout)
+        archive(artifact, finalText, duration, fromTimeout, error = asrFailure?.takeIf { finalText.isEmpty() })
         post { listener?.onLevel(0f) }
         if (finalText.isEmpty() && failedEntryId.isNotEmpty()) {
             // 没转出文字但音频在：别当成功收场，把重试入口递出去。
+            // 断网那种要说清「这段还在，能再识别一次」，而不是报一个错就完。
             val id = failedEntryId
-            val message = if (fromTimeout) "没等到识别结果" else "没有识别出文字"
+            val message =
+                when {
+                    asrFailure != null -> "${VoiceFailure.describe(asrFailure)}，录音已保存"
+                    fromTimeout -> "没等到识别结果"
+                    else -> "没有识别出文字"
+                }
             post { listener?.onRetryable(id, message) }
         } else {
             post { listener?.onFinal(finalText) }
         }
     }
 
+    /**
+     * **真的失败了**：麦克风坏了、录音中断。识别出错不走这里——那只是识别没了，
+     * 录音还在（见 [onAsrBroken]）。
+     */
     private fun finishWithError(message: String) {
         if (!stopped.compareAndSet(false, true)) return
         main.removeCallbacksAndMessages(null)
@@ -301,7 +412,7 @@ object VoiceEngine {
         result.setLength(0)
         isRecording = false
         isWaitingFinal = false
-        Log.e(TAG, "识别失败：$message（停止后 ${elapsedSinceStop()}ms）")
+        Log.e(TAG, "录音失败：$message（停止后 ${elapsedSinceStop()}ms）")
         stopAt = 0L
         // 失败也要留住：音频收尾、记录标成失败，用户能点重新识别。
         val artifact = closedArtifact()
@@ -337,9 +448,14 @@ object VoiceEngine {
                     // 有声音、没文字：留着，标失败。超时兜底也只有音频，
                     // 说明服务端没给结果，重识别比丢掉强。
                     VoiceHistory.attachAudio(appContext, id, artifact)
-                    val message = error ?: if (fromTimeout) "没等到识别结果" else "没有识别出文字"
+                    val message =
+                        when {
+                            error != null -> VoiceFailure.describe(error)
+                            fromTimeout -> "没等到识别结果"
+                            else -> "没有识别出文字"
+                        }
                     val status =
-                        if (error != null && isNetworkError(error)) {
+                        if (error != null && VoiceFailure.isNetwork(error)) {
                             VoiceHistory.Status.NoNetwork
                         } else {
                             VoiceHistory.Status.Failed
@@ -363,25 +479,6 @@ object VoiceEngine {
         entryId = ""
         if (id.isEmpty()) return
         runCatching { VoiceHistory.discard(ctx, id) }
-    }
-
-    /**
-     * 网络类错误 vs 鉴权/配置错误。决定重试按钮的分量：
-     * 断网那句值得再试，Key 填错了再试一百次也没用。
-     */
-    private fun isNetworkError(message: String): Boolean {
-        val m = message.lowercase()
-        if (m.contains("401") || m.contains("unauthorized") || m.contains("鉴权")) return false
-        return m.contains("timeout") ||
-            m.contains("timed out") ||
-            m.contains("connect") ||
-            m.contains("network") ||
-            m.contains("unable to resolve host") ||
-            m.contains("socket") ||
-            m.contains("closed") ||
-            m.contains("broken pipe") ||
-            m.contains("no route") ||
-            m.contains("dns")
     }
 
     /**

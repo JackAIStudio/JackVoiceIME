@@ -123,11 +123,32 @@ object VoiceTranscriber {
         private var done = false
         private var client: VolcAsrClient? = null
 
+        /**
+         * 空转次数：`pump` 每一拍都在等「发送队列空出来」，可队列如果一直不空，
+         * `sent` 就永远不前进，而每 10ms 一拍会一直排下去——直到 60 秒总超时。
+         * 用户看到的就是「正在重新识别…」转一分钟。
+         *
+         * 连续空转超过 [MAX_STALL_TICKS] 就当这条送不出去了，立刻收尾报错，
+         * 别让人干等。
+         */
+        private var stalledTicks = 0
+
         private val timeout =
             Runnable {
                 if (done) return@Runnable
                 finish()
                 callback.onFailed(entryId, "重新识别超时，请稍后再试", retryable = true)
+            }
+
+        /**
+         * 建连看门狗：`onOpen` 不来时 `pump` 根本不会启动，只能靠 60 秒总超时兜底。
+         * 那太久了——连不上就说连不上。
+         */
+        private val openTimeout =
+            Runnable {
+                if (done || opened) return@Runnable
+                finish()
+                callback.onFailed(entryId, "连接识别服务超时，请检查网络", retryable = true)
             }
 
         fun start() {
@@ -177,6 +198,7 @@ object VoiceTranscriber {
             client = c
             c.start()
             main.postDelayed(timeout, TIMEOUT_MS)
+            main.postDelayed(openTimeout, OPEN_TIMEOUT_MS)
         }
 
         private fun postProcess(
@@ -195,11 +217,25 @@ object VoiceTranscriber {
         private fun pump() {
             if (done) return
             val c = client ?: return
+            var progressed = false
             if (sent < chunks.size && c.queuedFrames() <= SEND_WINDOW) {
-                if (c.feed(chunks[sent])) sent += 1
+                if (c.feed(chunks[sent])) {
+                    sent += 1
+                    progressed = true
+                }
             }
             if (sent >= chunks.size) {
                 c.stop()
+                return
+            }
+            // 队列一直满、送不进去：别无限空转，攒够次数就认输。
+            // 否则 `sent` 卡住不动，`pump` 每 10ms 排一次，直到 60 秒总超时——
+            // 用户盯着「正在重新识别…」干等一分钟，就是这么来的。
+            if (progressed) {
+                stalledTicks = 0
+            } else if (++stalledTicks > MAX_STALL_TICKS) {
+                finish()
+                callback.onFailed(entryId, "这段录音送不出去，请稍后再试", retryable = true)
                 return
             }
             main.postDelayed({ pump() }, SEND_INTERVAL_MS)
@@ -212,6 +248,7 @@ object VoiceTranscriber {
             client?.cancel()
             client = null
             main.removeCallbacks(timeout)
+            main.removeCallbacks(openTimeout)
             // 结果与状态要落在同一条时间线上，别让 UI 先看到「空闲」再看到文字。
             main.post {
                 if (VoiceTranscriber.job === this) VoiceTranscriber.job = null
@@ -232,6 +269,23 @@ object VoiceTranscriber {
     private const val SEND_WINDOW = 8L
 
     private const val SEND_INTERVAL_MS = 10L
+
+    /**
+     * 连续多少拍送不进去就认输。
+     *
+     * 一拍 10ms，200 拍 = 2 秒。整段回放正常几秒就推完了，
+     * 连续两秒一帧都推不进去，基本就是连接废了，没必要再耗。
+     */
+    private const val MAX_STALL_TICKS = 200
+
+    /**
+     * 建连上限。
+     *
+     * `onOpen` 不来时 `pump` 不会启动，只剩总超时兜底——那要 60 秒。
+     * 断网、DNS 卡住时用户得盯着「正在重新识别…」转一分钟，太离谱。
+     * 15 秒足够走完一次 TCP + TLS 握手，走不完就是连不上。
+     */
+    private const val OPEN_TIMEOUT_MS = 15_000L
 
     /** 整段回放的上限。一分钟的录音通常几秒就出结果。 */
     private const val TIMEOUT_MS = 60_000L

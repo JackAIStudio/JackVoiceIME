@@ -11,6 +11,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Typeface
 import android.os.Bundle
+import android.os.Looper
 import android.provider.Settings
 import android.text.InputType
 import android.util.TypedValue
@@ -40,6 +41,7 @@ import com.osfans.trime.ime.voice.PunctuationMode
 import com.osfans.trime.ime.voice.VoiceAudio
 import com.osfans.trime.ime.voice.VoiceAudioPlayer
 import com.osfans.trime.ime.voice.VoiceDictionary
+import com.osfans.trime.ime.voice.VoiceFailure
 import com.osfans.trime.ime.voice.VoiceHistory
 import com.osfans.trime.ime.voice.VoicePrefs
 import com.osfans.trime.ime.voice.VoiceStats
@@ -382,6 +384,22 @@ class JackVoiceActivity :
     /** 正在重新识别的那条（界面上只标它一个，别让用户猜是哪条）。 */
     private var retryingEntryId: String? = null
 
+    /**
+     * 把识别回调切回主线程。
+     *
+     * [VoiceTranscriber] 的回调来自 OkHttp 线程，而 [select] 直接增删 View——
+     * 在后台线程碰 View 要么抛 `CalledFromWrongThreadException`，
+     * 要么在「刚好没触发检查」的时候悄悄不刷新（实测就是后者：
+     * 文字已经写进历史，卡片却还停在「正在重新识别…」）。
+     */
+    private fun onMain(block: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            block()
+        } else {
+            runOnUiThread(block)
+        }
+    }
+
     /** 每条记录卡片上的播放/进度控件，播放器回调统一刷新它们。 */
     private val playControls = mutableListOf<PlayControl>()
 
@@ -564,48 +582,54 @@ class JackVoiceActivity :
                 },
             )
         } else {
-            // 失败条目：标题说清「为什么没有字」，再用一行小字说明声音还在。
+            // 没有字：**一句话说清状态**，别再叠第二句解释。
+            //
+            // 以前这里是「状态行 + 蓝色提示行」两行，两行都在讲同一件事
+            // （「这段里没听到人声」+「声音还留着，可以点右上角听」），
+            // 卡片被撑得很高，真正要紧的「能不能重来」反而要往下找。
+            // 现在状态行只讲发生了什么，可重试时把那句话交给下面的按钮。
             val statusLine =
                 when (e.status) {
                     VoiceHistory.Status.Transcribing -> "正在识别…"
                     VoiceHistory.Status.Empty -> "这段里没听到人声"
-                    VoiceHistory.Status.NoNetwork -> "当时网络没连上，没能转成文字"
+                    VoiceHistory.Status.NoNetwork -> "当时网络没连上"
                     VoiceHistory.Status.Recording -> "上次听写被中断了"
-                    else -> e.error.ifBlank { "没有转出文字" }
+                    // Failed 的 error 可能还是原始异常串（老记录、或者服务端回了别的错）：
+                    // 走同一套判定，别把 `connection closed` 这种话摆到用户面前。
+                    else -> VoiceFailure.describeForHistory(e.error)
                 }
             card.addView(
                 Jv.text(this, statusLine, 15f, Jv.TEXT).apply {
                     setPadding(pad16, Jv.dp(this@JackVoiceActivity, 8), pad16, 0)
                 },
             )
-            if (e.hasAudio) {
-                // 「没听到人声」就别再怂恿用户重试了——声音留着是为了让他自己听，
-                // 不是让他反复点同一个空结果。
-                val hint =
-                    if (e.canRetry) {
-                        "声音在这里，可以再识别一次"
-                    } else {
-                        "声音还留着，可以点右上角听"
-                    }
+            // 第二行只在**确实还能重来**时出现，而且说的是下一步，不是复述状态。
+            // Empty 时什么都不加：服务端说没人说话，再怂恿重试是骗人。
+            if (e.canRetry) {
                 card.addView(
-                    Jv.text(this, hint, 13f, Jv.ACCENT).apply {
+                    Jv.text(this, "声音还在，可以再识别一次", 13f, Jv.ACCENT).apply {
                         setPadding(pad16, Jv.dp(this@JackVoiceActivity, 6), pad16, 0)
                     },
                 )
             }
         }
 
+        // 操作区：主操作靠左、删除永远贴右。
+        //
+        // 以前全部 `gravity = END`，于是「只有删除」的卡片上那颗键孤零零挂在最右边，
+        // 而「重新转写 + 删除」时两个键又挤在一起、分不出哪个是主操作。
+        // 现在重试/复制靠左起头，删除用 weight=1 的占位顶到最右。
         val actions =
             LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.END or Gravity.CENTER_VERTICAL
-                setPadding(pad16, Jv.dp(this@JackVoiceActivity, 10), pad16, Jv.dp(this@JackVoiceActivity, 14))
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(pad16, Jv.dp(this@JackVoiceActivity, 8), pad16, Jv.dp(this@JackVoiceActivity, 12))
             }
         if (retryingEntryId == e.id) {
             // 正在跑的那条，把「正在处理」写在它自己身上——不写在别处让人猜。
             actions.addView(
                 Jv.text(this, "正在重新识别…", 14f, Jv.ACCENT).apply {
-                    setPadding(Jv.dp(this@JackVoiceActivity, 10), Jv.dp(this@JackVoiceActivity, 6), 0, Jv.dp(this@JackVoiceActivity, 6))
+                    setPadding(Jv.dp(this@JackVoiceActivity, 10), Jv.dp(this@JackVoiceActivity, 8), 0, Jv.dp(this@JackVoiceActivity, 8))
                 },
             )
         } else if (e.canRetry) {
@@ -622,6 +646,8 @@ class JackVoiceActivity :
                 },
             )
         }
+        // 占位：把删除推到最右，哪怕这一行只有它一个。
+        actions.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
         actions.addView(
             iconText("删除") {
                 if (VoiceAudioPlayer.playingEntryId == e.id) VoiceAudioPlayer.stop()
@@ -654,10 +680,17 @@ class JackVoiceActivity :
                         entryId: String,
                         text: String,
                     ) {
-                        retryingEntryId = null
-                        VoiceHistory.markCompleted(this@JackVoiceActivity, entryId, text, 0L)
-                        toast("已补上：$text")
-                        select(Tab.History)
+                        // 回调在 OkHttp 线程：先切回主线程再碰状态和 View。
+                        onMain {
+                            retryingEntryId = null
+                            VoiceHistory.markCompleted(this@JackVoiceActivity, entryId, text, 0L)
+                            // 历史页**只把文字补进记录**，不往输入框里塞：
+                            // 这里没有「用户正在哪个输入框里说话」这个上下文，
+                            // 贸然 commitText 会落到他完全没在看的那个 App 里。
+                            // 文字就在下面这张卡片上，要复制有「复制」。
+                            toast("已补上 ${text.length} 个字")
+                            select(Tab.History)
+                        }
                     }
 
                     override fun onFailed(
@@ -665,15 +698,21 @@ class JackVoiceActivity :
                         message: String,
                         retryable: Boolean,
                     ) {
-                        retryingEntryId = null
-                        VoiceHistory.markFailed(
-                            this@JackVoiceActivity,
-                            entryId,
-                            if (retryable) VoiceHistory.Status.NoNetwork else VoiceHistory.Status.Empty,
-                            message,
-                        )
-                        toast("重新识别失败：$message")
-                        select(Tab.History)
+                        onMain {
+                            retryingEntryId = null
+                            // 与语音面板共用同一个判断：只有「服务端说没人说话」才收按钮。
+                            // 以前这里是 if (retryable) NoNetwork else Empty —— 一个布尔
+                            // 把「网络抖动」和「这段真的没人说话」混成同一件事，
+                            // 断一次网按钮就再也不出现了。
+                            VoiceHistory.markFailed(
+                                this@JackVoiceActivity,
+                                entryId,
+                                VoiceHistory.statusAfterRetryFailure(message, retryable),
+                                message,
+                            )
+                            toast("重新识别失败：${VoiceFailure.describe(message)}")
+                            select(Tab.History)
+                        }
                     }
                 },
             )

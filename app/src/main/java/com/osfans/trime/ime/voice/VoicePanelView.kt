@@ -21,6 +21,7 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import com.osfans.trime.R
 import com.osfans.trime.ime.keyboard.GestureFrame
@@ -59,6 +60,10 @@ class VoicePanelView(
     var onBackspaceTap: (() -> Unit)? = null
     var onActionTap: (() -> Unit)? = null
     var onRetryTap: (() -> Unit)? = null
+
+    /** 预览卡片上的「插入」/「丢弃」。 */
+    var onPreviewCommit: (() -> Unit)? = null
+    var onPreviewDiscard: (() -> Unit)? = null
 
     /** 顶部切换胶囊，语音面板与打字键盘共用同一个组件。 */
     val toolbar =
@@ -126,7 +131,7 @@ class VoicePanelView(
 
     private val retryView =
         FrameLayout(context).apply {
-            background = roundedDrawable(JvColors.keyBg, dp(KEY_CORNER_DP))
+            background = retryKeyBackground()
             isClickable = true
             visibility = GONE
             addView(
@@ -146,6 +151,103 @@ class VoicePanelView(
             setOnClickListener {
                 InputFeedbackManager.keyPressVibrate(this)
                 onOrbTap?.invoke()
+            }
+        }
+
+    // ── 重新识别：进度与预览 ────────────────────────────────────────────
+
+    /**
+     * 「正在重新识别…」。放在空闲态那句「点击说话」的位置上：
+     * 用户点了刷新之后，视线还停在那儿，不该让他去别处找进度。
+     */
+    private val retryingView =
+        TextView(context).apply {
+            setTextColor(JvColors.textSecondary)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            gravity = Gravity.CENTER
+            text = "正在重新识别…"
+            visibility = GONE
+        }
+
+    private val previewText =
+        TextView(context).apply {
+            setTextColor(JvColors.text)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            gravity = Gravity.START
+            includeFontPadding = false
+            setLineSpacing(dp(2).toFloat(), 1f)
+            // 一段话可能很长：卡片自己滚，别把面板撑破。
+            maxLines = 5
+            ellipsize = TextUtils.TruncateAt.END
+        }
+
+    /**
+     * 预览卡片：**只读**的文字 + 两个决定。
+     *
+     * 不在卡片上编辑是有意的——改字该在输入框里改。在面板上做一套编辑，
+     * 就要和 Rime 的组合输入抢状态，收益远小于成本。
+     */
+    private val previewCard =
+        LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            background = roundedDrawable(JvColors.keyBg, dp(18))
+            elevation = dp(4).toFloat()
+            setPadding(dp(16), dp(12), dp(16), dp(10))
+            visibility = GONE
+            isClickable = true
+
+            addView(
+                TextView(context).apply {
+                    setTextColor(JvColors.textSecondary)
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 12f)
+                    includeFontPadding = false
+                    text = "识别好了，要插入吗"
+                },
+            )
+            // 文字自己滚，按钮钉在卡片底部：一段话再长也不能把按钮顶出可视区，
+            // 更不能让卡片长到压住下面的键区。
+            addView(
+                ScrollView(context).apply {
+                    isFillViewport = false
+                    addView(previewText)
+                },
+                LinearLayout.LayoutParams(LayoutParams.MATCH_PARENT, 0, 1f).apply {
+                    topMargin = dp(6)
+                },
+            )
+
+            val buttons =
+                LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.END
+                }
+            buttons.addView(previewButton("丢弃", JvColors.textSecondary) { onPreviewDiscard?.invoke() })
+            buttons.addView(previewButton("插入", JvColors.accent) { onPreviewCommit?.invoke() })
+            addView(
+                buttons,
+                LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT).apply {
+                    topMargin = dp(4)
+                },
+            )
+        }
+
+    /** 卡片上的一个小按钮：和标点菜单里那套观感一致，不要用 Material 按钮。 */
+    private fun previewButton(
+        label: String,
+        color: Int,
+        onClick: () -> Unit,
+    ): TextView =
+        TextView(context).apply {
+            text = label
+            setTextColor(color)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 14f)
+            includeFontPadding = false
+            gravity = Gravity.CENTER
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+            isClickable = true
+            setOnClickListener {
+                InputFeedbackManager.keyPressVibrate(this)
+                onClick()
             }
         }
 
@@ -289,6 +391,30 @@ class VoicePanelView(
                 topMargin = dp(97)
             },
         )
+        // 进度和预览卡片都占空闲态「点击说话」那一带：用户点完刷新，
+        // 视线就停在那儿，结果不该出现在别处。
+        addView(
+            retryingView,
+            LayoutParams(LayoutParams.WRAP_CONTENT, dp(22)).apply {
+                gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                topMargin = dp(97)
+            },
+        )
+        addView(
+            previewCard,
+            // 预览是「决定时刻」：这期间麦克风和底栏都没有意义，
+            // 让卡片占满顶栏以下、底部让位以上的整块面板。
+            //
+            // 中间那块（顶栏 51 到键区 123）只有 70dp，塞不下几行字，
+            // 按钮还会被裁掉——试过，卡片矮得只剩标题和半截按钮。
+            // 既然这一屏的**唯一任务**就是「要不要这段字」，就该给它整块地方。
+            LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT).apply {
+                topMargin = dp(PREVIEW_TOP_DP)
+                bottomMargin = dp(BOTTOM_SAFE_DP)
+                leftMargin = dp(KEY_SIDE_PADDING_DP + 4)
+                rightMargin = dp(KEY_SIDE_PADDING_DP + 4)
+            },
+        )
         addView(
             orb,
             LayoutParams(dp(ORB_BOX), dp(ORB_BOX)).apply {
@@ -351,14 +477,30 @@ class VoicePanelView(
         // 面板切到拼音键盘再切回来时，标点菜单/遮罩可能停在动画半路：
         // 一个 alpha=0 但仍是 VISIBLE 的遮罩会吃掉顶栏和整块面板的触摸。
         hidePunctuationMenuNow()
+        // 每次挂上窗口都重新算一遍刷新键。
+        //
+        // 以前这颗键只在「状态变化」时由 VoiceWindow 推一次。可面板一直开着、
+        // 状态没变（比如重新识别失败后仍是 Idle），就再没人推——键该出现时不出现
+        // （实测历史里有 9 条可重试，面板上却没有入口）。挂在窗口上这个时机
+        // 是可靠的：每次键盘展开、每次从拼音切回来都会走。
+        onAttachedSync?.invoke()
     }
+
+    /** 窗口挂上时请 VoiceWindow 重新同步一次（刷新键等）。 */
+    var onAttachedSync: (() -> Unit)? = null
 
     fun setState(state: VoiceState) {
         if (state != VoiceState.Idle) {
             resetTrackpad()
             hidePunctuationMenuNow()
+            // 录音 / 等终稿时用户已经表达了别的意图：预览卡片和进度都收掉。
+            previewCard.visibility = GONE
+            retryingView.visibility = GONE
         }
         this.state = state
+        // 麦克风可能因为预览卡片让过位，任何状态切换都先把它要回来；
+        // 真正该藏的时候（预览卡片开着）由 setPreviewText / setRetrying 再收。
+        orb.visibility = VISIBLE
         shrinkOrbHitArea(state == VoiceState.Idle)
         orb.state = state
         when (state) {
@@ -390,6 +532,9 @@ class VoicePanelView(
                 orb.level = 0f
             }
         }
+        // 状态一变就重算一次刷新键：它同时受「状态」和「有没有可重试录音」两个条件约束，
+        // 以前只有外部显式推的时候才更新，漏推一次就再也不出现。
+        applyRetryVisibility()
     }
 
     /**
@@ -397,7 +542,95 @@ class VoicePanelView(
      * 录音 / 处理中一律收起来——那两种状态下这句话还没轮到最后一步。
      */
     fun setRetryAvailable(available: Boolean) {
-        retryView.visibility = if (available && state == VoiceState.Idle) VISIBLE else GONE
+        retryAvailable = available
+        applyRetryVisibility()
+    }
+
+    /**
+     * 这颗键显不显示，只取决于两件事：**有没有可重试的录音**、**面板是不是空闲**。
+     *
+     * 拆成 `applyRetryVisibility()` 是因为它以前只被外部在「状态变化」时推一次：
+     * 面板一直开着、状态没变（比如重新识别失败之后又变回 Idle），
+     * 就没人再推了——键该出现的时候不出现。现在状态一变、可用性一变都重新算一遍。
+     */
+    private fun applyRetryVisibility() {
+        retryView.visibility = if (retryAvailable && state == VoiceState.Idle) VISIBLE else GONE
+    }
+
+    /** 有没有可重试的录音。 */
+    private var retryAvailable = false
+
+    /**
+     * 重新识别的预览卡片：把「待插入的文字」摆在面板上，由用户决定要不要。
+     *
+     * 为什么要有这张卡片，而不是识别完直接上屏：重新转写是补救路径，
+     * 等好几秒是常态，结果也未必是用户想要的。直接塞进输入框会打断
+     * 已经打的内容，而且没法反悔。这里把决定权交回去，代价只是多点一下。
+     *
+     * @param text null 表示收起卡片（正在跑 / 已处理 / 用户丢弃）
+     */
+    fun setPreviewText(text: String?) {
+        val shown = text?.trim().orEmpty()
+        if (shown.isEmpty()) {
+            previewCard.visibility = GONE
+            // 卡片收起：空闲态那套（麦克风 + 底栏）摆回来。
+            if (state == VoiceState.Idle) {
+                orb.visibility = VISIBLE
+                bottomBar.visibility = VISIBLE
+                statusView.visibility = VISIBLE
+                statusView.text = "点击说话"
+            }
+            return
+        }
+        if (state != VoiceState.Idle) return
+        previewText.text = shown
+        previewCard.visibility = VISIBLE
+        previewCard.scrollTo(0, 0)
+        // 卡片占满整块面板，麦克风、提示、底栏统统让位：
+        // 这一屏的唯一任务就是「要不要这段字」，别让别的东西分心或挡住。
+        orb.visibility = GONE
+        statusView.visibility = GONE
+        bottomBar.visibility = GONE
+    }
+
+    /** 正在重新识别：面板上给一句进度，而不是让用户对着「点击说话」等。 */
+    fun setRetrying(busy: Boolean) {
+        if (state != VoiceState.Idle) return
+        retryingView.visibility = if (busy) VISIBLE else GONE
+        if (busy) {
+            // 跑的时候把麦克风、提示、底栏都让开，只留进度。
+            statusView.visibility = GONE
+            previewCard.visibility = GONE
+            orb.visibility = GONE
+            bottomBar.visibility = GONE
+            return
+        }
+        // 跑完了：以**预览卡片**为准决定谁露面。
+        // 卡片开着就整块让给它，否则把空闲态那套摆回来。
+        val hasPreview = previewCard.visibility == VISIBLE
+        orb.visibility = if (hasPreview) GONE else VISIBLE
+        statusView.visibility = if (hasPreview) GONE else VISIBLE
+        bottomBar.visibility = if (hasPreview) GONE else VISIBLE
+        statusView.text = "点击说话"
+    }
+
+    /**
+     * 这一轮只录了音、没有识别（没网 / 连接中途断了）。
+     *
+     * 只改录音态的那句提示：**麦克风还在开着，别动状态、别收底栏**。
+     * 用户得知道「字不会实时出来，但这段话会被存下来」，
+     * 而不是对着一个不出字的面板猜是不是坏了。
+     */
+    fun setAsrDegraded(degraded: Boolean, notice: String = "") {
+        if (state != VoiceState.Recording) return
+        hintView.visibility = VISIBLE
+        hintView.text =
+            if (degraded) {
+                val reason = notice.ifBlank { "网络没连上" }
+                "$reason，先录着 · 再次点击完成"
+            } else {
+                "再次点击以完成"
+            }
     }
 
     /**
@@ -643,7 +876,7 @@ class VoicePanelView(
             row.hint.setTextColor(JvColors.textSecondary)
         }
         retryIcon.setColorFilter(JvColors.text)
-        retryView.background = roundedDrawable(JvColors.keyBg, dp(KEY_CORNER_DP))
+        retryView.background = retryKeyBackground()
         orb.refreshColors()
     }
 
@@ -791,6 +1024,25 @@ class VoicePanelView(
         setColor(color)
     }
 
+    /**
+     * 刷新键的键面。
+     *
+     * **不能只用 [JvColors.keyBg]**：浅色模式下它是纯白 `#FFFFFF`，
+     * 而面板背景是 `#F1F1F1`——对比度只有 6%，肉眼几乎看不见。
+     * 那颗键其实一直在、也一直能点（实测点它确实会触发重新识别），
+     * 只是用户看不到，于是以为「根本没有重新转写按钮」。
+     *
+     * 这里补一圈描边把它从底色里托出来：浅色用淡灰边，深色用亮一点的边，
+     * 两种模式下都还是黑白灰，不破坏面板的克制感。
+     */
+    private fun retryKeyBackground() =
+        android.graphics.drawable.GradientDrawable().apply {
+            shape = android.graphics.drawable.GradientDrawable.RECTANGLE
+            cornerRadius = dp(KEY_CORNER_DP).toFloat()
+            setColor(JvColors.keyBg)
+            setStroke(dp(1), JvColors.divider)
+        }
+
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     private fun dp(value: Float): Int = (value * resources.displayMetrics.density).toInt()
@@ -890,6 +1142,20 @@ class VoicePanelView(
 
         /** 预览气泡最多留多少字；再多就取最后一段，两行放得下。 */
         private const val PREVIEW_MAX_CHARS = 30
+
+        /**
+         * 重新识别预览卡片的位置与高度（dp）。
+         *
+         * 面板 320dp = 顶栏区 + 键区。底栏占 KEY_ROW_DP*3 = 177dp，
+         * 再加 BOTTOM_SAFE_DP 20dp，所以**键区上沿在 320-20-177 = 123dp**。
+         * 卡片从顶栏下沿（11+36+4=51）一直铺到键区上沿之前，
+         * 中间这 68dp 全是空白，正好给它用。
+         *
+         * 以前按 84dp 起算，只剩 35dp 高，长一点的文字就把卡片撑到键区上，
+         * 压住 ⌫（实测那颗键点不动）。高度必须**封死**，文字多了在卡片里滚。
+         */
+        private const val PREVIEW_TOP_DP = 51
+        private const val PREVIEW_MAX_HEIGHT_DP = 123 - PREVIEW_TOP_DP - 4
 
         /** 与打字键盘的四行网格对齐：236dp / 4 = 59dp；底行下面再留 20dp 给手势条。 */
         private const val KEY_ROW_DP = 59

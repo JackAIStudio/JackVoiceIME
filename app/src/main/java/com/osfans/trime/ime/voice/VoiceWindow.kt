@@ -15,6 +15,7 @@ import com.osfans.trime.ime.window.BoardWindow
 import com.osfans.trime.ime.window.BoardWindowManager
 import com.osfans.trime.ime.window.ResidentWindow
 import com.osfans.trime.util.AppUtils
+import timber.log.Timber
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -75,6 +76,17 @@ class VoiceWindow(di: DI) :
         view.toolbar.onHideTap = { service.requestHideSelf(0) }
         // 上一轮识别失败时，这段录音还在本地：点一下就地再识别，不用去历史页翻。
         view.onRetryTap = { onRetryTap() }
+        // 重新识别的结果不自动上屏：先在这张卡片上给用户看一眼，他点「插入」才落。
+        view.onPreviewCommit = { VoiceSession.commitPreview() }
+        view.onPreviewDiscard = { VoiceSession.discardPreview() }
+        // 面板每次挂上窗口都回来同步一次：键盘展开 / 从拼音切回来都走这里。
+        // 这是刷新键唯一可靠的时机——只靠「状态变化」推的话，
+        // 面板一直开着、状态没变，就再没人推了。
+        view.onAttachedSync = {
+            syncRetryButton()
+            view.setPreviewText(VoiceSession.preview?.text)
+            syncRetrying(view)
+        }
         panel = view
         return view
     }
@@ -111,11 +123,37 @@ class VoiceWindow(di: DI) :
     override fun onVoiceStateChanged(state: VoiceState) {
         val view = panel ?: return
         view.setState(state)
+        // 这一轮是不是「只录着、还没识别」：面板上那句提示要跟着换。
+        view.setAsrDegraded(VoiceSession.asrDegraded, VoiceSession.asrNotice)
         syncRetryButton()
+        // 重新识别的进度与预览卡片。**顺序不能反**：
+        // setRetrying(false) 会按「有没有预览」决定要不要把麦克风放回来，
+        // 所以得先把预览状态摆好，再让它收尾。
+        view.setPreviewText(VoiceSession.preview?.text)
+        syncRetrying(view)
         // 录音中切走再切回来：把最后一段流式结果补上，预览不会变空。
         if (state == VoiceState.Recording && VoiceSession.lastPartial.isNotEmpty()) {
             view.setPreview(VoiceSession.lastPartial)
         }
+    }
+
+    /**
+     * 「正在重新识别…」该不该显示。
+     *
+     * 不只看会话里那个标记，还要跟 [VoiceTranscriber] 的真实任务对一次：
+     * 标记是界面状态，任务是事实。标记因为任何原因残留（服务重建、回调丢失），
+     * 而事实上没有任务在跑，就该立刻把这句话收掉——不能让用户对着
+     * 「正在重新识别…」干等，那看起来就是卡死了。
+     */
+    private fun syncRetrying(view: VoicePanelView) {
+        val marked = VoiceSession.retryingEntryId
+        if (marked != null && VoiceTranscriber.busyEntryId == null) {
+            // 标记残留：清掉它，别让界面继续等一个不存在的任务。
+            VoiceSession.clearStaleRetrying()
+            view.setRetrying(false)
+            return
+        }
+        view.setRetrying(marked != null)
     }
 
     /** 有可重试的录音、且面板回到空闲时，把「重新识别这段录音」亮出来。 */
@@ -124,17 +162,9 @@ class VoiceWindow(di: DI) :
     }
 
     private fun onRetryTap() {
-        if (!VoiceSession.retryLast()) return
-        panel?.showMessage("正在根据本地录音重新识别…")
-        noticeJob?.cancel()
-        noticeJob =
-            service.lifecycleScope.launch {
-                delay(2600)
-                if (VoiceSession.state == VoiceState.Idle) {
-                    panel?.setState(VoiceState.Idle)
-                    syncRetryButton()
-                }
-            }
+        // 进度由 VoiceSession.retryingEntryId 驱动（setRetrying），
+        // 别再在这里 showMessage——两处都写 statusView 会互相盖掉。
+        VoiceSession.retryLast()
     }
 
     override fun onVoicePartial(text: String) {

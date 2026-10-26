@@ -256,6 +256,7 @@
     <string name="ignore_system_gesture_insets">Ignore system gesture insets</string>
     <string name="voice_listening">正在聆听…</string>
     <string name="voice_listening_hint">切到拼音打字也不会中断，说完了点这条通知</string>
+    <string name="voice_listening_offline_hint">网络没连上，这段会先存下来，停下之后可以重新识别</string>
     <string name="voice_thinking">正在整理文字…</string>
     <string name="voice_thinking_hint">录音已经存在本机，稍等一下就会上屏</string>
     <string name="voice_stop">完成</string>

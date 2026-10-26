@@ -5,14 +5,41 @@
 
 package com.osfans.trime.ime.voice
 
+import android.os.Handler
+import android.os.Looper
 import android.widget.Toast
 import com.osfans.trime.ime.core.TrimeInputMethodService
 import timber.log.Timber
 import java.util.Collections
 import java.util.WeakHashMap
 
-/** 听写会话的三种状态。面板和键盘顶栏都看这一份，不再各记各的。 */
+/**
+ * 听写会话的三种状态。面板和键盘顶栏都看这一份，不再各记各的。
+ *
+ * 「没网」不是第四种状态：[VoiceEngine] 会在没网时照样录音，界面仍然显示
+ * [Recording]，只是通过 [VoiceSession.asrDegraded] 把提示语换成「先录着」。
+ * 状态机只描述**麦克风在干什么**，网络的好坏是它的注脚，不是它的一个分支。
+ *
+ * 重新识别的预览也不是状态：它走 [VoiceSession.preview]，面板在空闲态上
+ * 叠一张卡片，麦克风仍然是 [Idle]——用户随时可以直接再录一条。
+ */
 enum class VoiceState { Idle, Recording, Thinking }
+
+/**
+ * 重新识别出来的文字，等用户决定要不要。
+ *
+ * **不自动上屏**。重新转写是一条补救路径（当时没网 / 没等到终稿），
+ * 不是日常热路径：它可能要等好几秒，结果也可能不是用户想要的。
+ * 直接塞进输入框会打断用户已经打的内容，而且没法反悔。
+ *
+ * 所以流程是：出结果 → 面板上给一张卡片 → 用户点「插入」才落进输入框。
+ * 卡片是**只读**的：改字该在输入框里改，在面板上编辑会引入一套
+ * 和 Rime 组合输入打架的状态，不值当。
+ */
+data class VoicePreview(
+    val entryId: String,
+    val text: String,
+)
 
 /**
  * 听写会话：**与键盘模块无关的常驻服务**。
@@ -58,6 +85,9 @@ object VoiceSession : VoiceEngine.Listener {
 
     private var service: TrimeInputMethodService? = null
 
+    /** 主线程队列：识别回调来自 OkHttp 线程，见 [post]。 */
+    private val main = Handler(Looper.getMainLooper())
+
     /**
      * 窗口是短期对象（主题切换会重建 InputView），用弱引用收着：
      * 窗口正常 detach 时会自己摘掉；漏掉的那个也不会把整个窗口钉在内存里。
@@ -84,14 +114,58 @@ object VoiceSession : VoiceEngine.Listener {
         private set
 
     /**
+     * 这一轮只录了音、没有识别（没网，或者连接中途断了）。
+     *
+     * 面板据此把那句「正在聆听」换成「先录着，停下后再识别」：
+     * 用户得知道字不会实时出来，而不是对着一个不出字的界面猜。
+     */
+    @Volatile
+    var asrDegraded: Boolean = false
+        private set
+
+    /** 断掉的原因（已是可以直接看的措辞）。没断时是空串。 */
+    @Volatile
+    var asrNotice: String = ""
+        private set
+
+    /**
+     * 重新识别出来、还没被用户确认的文字。非空时面板会盖一张预览卡片。
+     *
+     * 只在 [VoiceState.Idle] 有意义：录音 / 等终稿时用户已经表达了别的意图，
+     * 那张卡片会被 [start] / [cancel] 主动收掉。
+     */
+    @Volatile
+    var preview: VoicePreview? = null
+        private set
+
+    /** 正在跑重新识别的那条记录。界面据此显示「正在重新识别…」。 */
+    @Volatile
+    var retryingEntryId: String? = null
+        private set
+
+    /**
      * 最近一次失败、且音频还在的那个条目。
      *
      * 面板据此在麦克风旁边亮出「重试」——不用用户自己去历史页翻。
-     * 用户点了重试、或者重新录了一条，这里就清掉。
+     *
+     * **不再只靠内存里的一个 id**：以前这个字段在 `unbind()` 里被清空、
+     * 只在 `bind()` 时补一次，输入法服务被回收/重建的时机稍有偏差，
+     * 刷新键就再也不出现了（用户实测：历史里有 11 条可重试，面板上却没有那颗键）。
+     * 现在读的时候顺手回退到历史里真正的第一条可重试记录，
+     * 只要磁盘上有，键就在。
      */
+    val retryEntryId: String?
+        get() {
+            inMemoryRetryId?.let { return it }
+            val ctx = service ?: return null
+            val id = runCatching { VoiceHistory.retryable(ctx).firstOrNull()?.id }.getOrNull()
+            if (id != null) inMemoryRetryId = id
+            return id
+        }
+
+    /** 缓存：避免每次读都扫一遍历史文件。清空时置 null，下次读会重新算。 */
     @Volatile
-    var retryEntryId: String? = null
-        private set
+    private var inMemoryRetryId: String? = null
 
     /** 已识别、但因为用户在拼写 / 键盘收起而暂未上屏的文本。 */
     private val pending = StringBuilder()
@@ -102,11 +176,9 @@ object VoiceSession : VoiceEngine.Listener {
     fun bind(svc: TrimeInputMethodService) {
         service = svc
         VoiceEngine.setListener(this)
-        // 输入法被系统回收又重新起来时，上一轮失败的录音还在：把重试入口接回来。
-        if (retryEntryId == null) {
-            retryEntryId =
-                runCatching { VoiceHistory.retryable(svc).firstOrNull()?.id }.getOrNull()
-        }
+        // 输入法被系统回收又重新起来时，上一轮失败的录音还在。
+        // 缓存清掉，下次读 retryEntryId 会自己去历史里找（见那个 getter）。
+        inMemoryRetryId = null
         // 进程里的引擎可能还在上一轮（服务重建、窗口重建）：状态跟着引擎走。
         state =
             when {
@@ -114,6 +186,7 @@ object VoiceSession : VoiceEngine.Listener {
                 VoiceEngine.isWaitingFinal -> VoiceState.Thinking
                 else -> VoiceState.Idle
             }
+        asrDegraded = VoiceEngine.mode == VoiceEngine.Mode.Offline
         notifyState()
     }
 
@@ -137,8 +210,17 @@ object VoiceSession : VoiceEngine.Listener {
         DictationAudioFocus.release()
         state = VoiceState.Idle
         lastPartial = ""
+        asrDegraded = false
+        asrNotice = ""
         pending.setLength(0)
-        retryEntryId = null
+        inMemoryRetryId = null
+        // 输入法都没了，正在跑的那条转写也没人接结果：连进度标记一起清掉。
+        // 漏掉这两个，服务重建后界面会一直停在「正在重新识别…」——
+        // 实测踩过：明明早就没有任务在跑，面板上那句话一直挂着。
+        retryingEntryId = null
+        preview = null
+        // 转写任务本身也要掐掉，否则它跑完还会回调一个已经销毁的 svc。
+        runCatching { VoiceTranscriber.cancel() }
         listeners.clear()
     }
 
@@ -170,8 +252,10 @@ object VoiceSession : VoiceEngine.Listener {
         }
         // 上一轮还没落完的结果先插进去，别被新记录覆盖。
         flushPending(force = true)
+        // 预览卡片还开着就开始新录音：用户显然已经不要那段字了。
+        preview = null
 
-        retryEntryId = null
+        inMemoryRetryId = null
         VoiceCaptureService.start(svc)
         if (!VoiceEngine.startRecording(svc)) {
             // 麦克风没起来：前台服务也要一起收掉，否则通知栏会留下一条
@@ -183,6 +267,9 @@ object VoiceSession : VoiceEngine.Listener {
         // 不影响本轮录音。
         DictationAudioFocus.acquire(svc) { cancel() }
         lastPartial = ""
+        // 没网时这一轮照样录，只是不出字：把这件事先摆到界面上。
+        asrDegraded = VoiceEngine.mode == VoiceEngine.Mode.Offline
+        asrNotice = if (asrDegraded) "网络没连上" else ""
         state = VoiceState.Recording
         notifyState()
     }
@@ -218,7 +305,11 @@ object VoiceSession : VoiceEngine.Listener {
         finishCapture(service)
         state = VoiceState.Idle
         lastPartial = ""
-        retryEntryId = null
+        asrDegraded = false
+        asrNotice = ""
+        inMemoryRetryId = null
+        preview = null
+        retryingEntryId = null
         pending.setLength(0)
         notifyState()
     }
@@ -247,6 +338,13 @@ object VoiceSession : VoiceEngine.Listener {
         val svc = service
         lastPartial = ""
         state = VoiceState.Idle
+        asrDegraded = false
+        asrNotice = ""
+        // 终稿到达 = 这一轮结束。**必须在这里收掉前台服务**：
+        // 以前只有 stop() / cancel() 会收，而引擎自己走完（终稿、出错、超时兜底）
+        // 时没人管，于是麦克风前台服务一直挂着、通知栏那条「正在聆听」再也不走。
+        // 用户看到的正是「明明没在听了，下拉还写着正在聆听」。
+        finishCapture(svc)
         notifyState()
 
         if (svc == null) {
@@ -261,11 +359,31 @@ object VoiceSession : VoiceEngine.Listener {
     override fun onError(message: String) {
         lastPartial = ""
         state = VoiceState.Idle
+        asrDegraded = false
+        asrNotice = ""
+        // 出错同样是「这一轮结束了」：前台服务不该比录音活得久。
+        finishCapture(service)
         notifyState()
         // 这一轮如果存下了音频，把「重试」入口递到界面上——不用用户去历史页翻。
         val failed = VoiceEngine.failedEntryId
-        if (failed.isNotEmpty()) retryEntryId = failed
-        activeListeners().forEach { it.onVoiceNotice("识别失败：$message") }
+        if (failed.isNotEmpty()) inMemoryRetryId = failed
+        activeListeners().forEach { it.onVoiceNotice("识别失败：${VoiceFailure.describe(message)}") }
+    }
+
+    /**
+     * 识别这条线断了，**录音还在继续**。
+     *
+     * 这里**不能**碰状态机、也**不能**收前台服务：麦克风还得开着，
+     * 用户说的话还要落盘。只把「暂时不出字」这件事告诉界面。
+     */
+    override fun onAsrDegraded(message: String) {
+        asrDegraded = true
+        asrNotice = VoiceFailure.describe(message)
+        lastPartial = ""
+        activeListeners().forEach {
+            it.onVoicePartial("")
+            it.onVoiceStateChanged(state)
+        }
     }
 
     /**
@@ -280,12 +398,29 @@ object VoiceSession : VoiceEngine.Listener {
     ) {
         lastPartial = ""
         state = VoiceState.Idle
-        retryEntryId = entryId
+        asrDegraded = false
+        asrNotice = ""
+        inMemoryRetryId = entryId
+        // 同样要收掉前台服务：这一轮已经结束，只是没转出字而已。
+        finishCapture(service)
         notifyState()
-        activeListeners().forEach { it.onVoiceNotice("$message，录音已保存，可重新识别") }
+        activeListeners().forEach { it.onVoiceNotice("$message，可重新识别") }
     }
 
     // ── 重新识别（失败的那条录音还在，用户点一下再试）──────────────────
+
+    /**
+     * 清掉「正在重新识别」这个标记。
+     *
+     * 给界面用：当标记还在、但 [VoiceTranscriber] 已经没有任务在跑时，
+     * 说明这个标记是残留（服务重建、回调丢失）。留着它界面会永远停在
+     * 「正在重新识别…」，看起来就是卡死。
+     */
+    fun clearStaleRetrying() {
+        if (retryingEntryId == null) return
+        retryingEntryId = null
+        notifyState()
+    }
 
     /**
      * 重新识别 [retryEntryId] 指向的那段录音。
@@ -301,7 +436,12 @@ object VoiceSession : VoiceEngine.Listener {
         return retry(id)
     }
 
-    /** 重新识别指定条目；成功就把文字当作一次正常听写落进输入框。 */
+    /**
+     * 重新识别指定条目。
+     *
+     * **成功也不自动上屏**：结果放进 [preview]，由用户点「插入」才落进输入框。
+     * 理由见 [VoicePreview]——这是补救路径，不是热路径。
+     */
     fun retry(entryId: String): Boolean {
         val svc = service ?: return false
         val started =
@@ -309,16 +449,21 @@ object VoiceSession : VoiceEngine.Listener {
                 svc,
                 entryId,
                 object : VoiceTranscriber.Callback {
+                    // 回调来自 OkHttp 线程：状态、上屏、通知都得回主线程再动。
                     override fun onDone(
                         entryId: String,
                         text: String,
                     ) {
-                        // 补出来了就不再挂着那个按钮。
-                        if (retryEntryId == entryId) retryEntryId = null
-                        VoiceHistory.markCompleted(svc, entryId, text, 0L)
-                        notifyState()
-                        activeListeners().forEach { it.onVoiceNotice("已补上：$text") }
-                        deliver(text)
+                        post {
+                            // 补出来了就不再挂着那个按钮。
+                            if (inMemoryRetryId == entryId) inMemoryRetryId = null
+                            retryingEntryId = null
+                            VoiceHistory.markCompleted(svc, entryId, text, 0L)
+                            // 文字已经进记录了，用户随时能在历史页看到；
+                            // 这里只是把「要不要现在插进输入框」交还给他。
+                            preview = VoicePreview(entryId, text)
+                            notifyState()
+                        }
                     }
 
                     override fun onFailed(
@@ -326,19 +471,41 @@ object VoiceSession : VoiceEngine.Listener {
                         message: String,
                         retryable: Boolean,
                     ) {
-                        // 写进记录：这段确实没声音/识别不了，别让按钮一直亮着骗人点。
-                        VoiceHistory.markFailed(svc, entryId, VoiceHistory.Status.Empty, message)
-                        if (retryable) {
-                            retryEntryId = entryId
-                        } else if (retryEntryId == entryId) {
-                            retryEntryId = null
+                        post {
+                            retryingEntryId = null
+                            // 写进记录时要**如实**分状态。
+                            //
+                            // 这里原来一律写 Status.Empty（「没听到人声」）。可 Empty 在
+                            // canRetry 里是被排除的——于是一次网络抖动就把这条录音
+                            // 永久判死：历史页说「这段里没听到人声」，重试按钮再也不出现，
+                            // 而音频其实好好的（实测 01:29 那条有 57% 的块是明显人声）。
+                            // 现在只有服务端真的说「这段没人说话」才记 Empty。
+                            VoiceHistory.markFailed(
+                                svc,
+                                entryId,
+                                VoiceHistory.statusAfterRetryFailure(message, retryable),
+                                message,
+                            )
+                            if (retryable) {
+                                inMemoryRetryId = entryId
+                            } else {
+                                // 这条被判成「没人说话」了，但**别的录音还在**。
+                                // 以前这里只清掉「等于本条」的缓存，而缓存本来就指着本条，
+                                // 清完不会去历史里找下一条——刷新键就整个消失，
+                                // 明明还有 9 条可重试，用户却看不到入口。
+                                // 统一置空，让 getter 去历史里重新挑一条。
+                                inMemoryRetryId = null
+                            }
+                            notifyState()
+                            activeListeners().forEach {
+                                it.onVoiceNotice("重新识别失败：${VoiceFailure.describe(message)}")
+                            }
                         }
-                        notifyState()
-                        activeListeners().forEach { it.onVoiceNotice("重新识别失败：$message") }
                     }
                 },
             )
         if (started) {
+            retryingEntryId = entryId
             val entry = runCatching { VoiceHistory.find(svc, entryId) }.getOrNull()
             val whenText =
                 entry?.let {
@@ -351,6 +518,25 @@ object VoiceSession : VoiceEngine.Listener {
     }
 
     // ── 上屏 ────────────────────────────────────────────────────────────
+
+    /**
+     * 用户点了「插入」：把预览的文字落进输入框。
+     *
+     * 走和正常终稿同一条 [deliver] 路径，所以「正在拼写时排队」那套规则一样生效。
+     */
+    fun commitPreview() {
+        val p = preview ?: return
+        preview = null
+        notifyState()
+        deliver(p.text)
+    }
+
+    /** 用户点了「丢弃」：文字已经存进历史，这里只是不插进输入框。 */
+    fun discardPreview() {
+        if (preview == null) return
+        preview = null
+        notifyState()
+    }
 
     /**
      * 结果落到输入框：
@@ -408,6 +594,17 @@ object VoiceSession : VoiceEngine.Listener {
         activeListeners().forEach { it.onVoiceStateChanged(state) }
         // 通知栏的标题跟着状态换：「正在聆听」不该在等终稿时还挂着。
         runCatching { VoiceCaptureService.refresh() }
+    }
+
+    /**
+     * 把回调切回主线程。
+     *
+     * [VoiceTranscriber] 的回调来自 OkHttp 线程；会话里的状态、上屏、
+     * 通知刷新都假定在主线程（监听者是 View）。在后台线程直接改，
+     * 轻则界面不刷新，重则 `CalledFromWrongThreadException`。
+     */
+    private fun post(block: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) block() else main.post(block)
     }
 
     private fun toast(message: String) {
