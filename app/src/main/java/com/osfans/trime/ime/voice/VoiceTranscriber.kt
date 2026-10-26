@@ -40,6 +40,7 @@ object VoiceTranscriber {
     private val main = Handler(Looper.getMainLooper())
 
     private var job: Job? = null
+    private var localJob: LocalJob? = null
 
     /** 正在重识别的那条记录。界面据此显示「正在重新识别」。 */
     @Volatile
@@ -47,8 +48,8 @@ object VoiceTranscriber {
         private set
 
     fun isBusy(entryId: String? = null): Boolean {
-        val current = job ?: return false
-        return entryId == null || current.entryId == entryId
+        val current = job?.entryId ?: localJob?.entryId ?: return false
+        return entryId == null || current == entryId
     }
 
     /**
@@ -84,25 +85,36 @@ object VoiceTranscriber {
             callback.onFailed(entryId, "这条记录没有可用的录音", retryable = false)
             return false
         }
-        val key = VoicePrefs.apiKey(ctx)
-        if (key.isBlank()) {
-            callback.onFailed(entryId, "请先在设置里填语音 API Key", retryable = false)
-            return false
-        }
         val pcm = VoiceAudio.readPcm(ctx, entry.fileName!!)
         if (pcm == null || pcm.isEmpty()) {
             callback.onFailed(entryId, "录音文件读不出来", retryable = false)
             return false
         }
+        if (VoicePrefs.engine(ctx) == AsrEngine.Local) {
+            if (!LocalModelManager.isReady(ctx)) {
+                callback.onFailed(entryId, "本地模型还没下载好", retryable = false)
+                return false
+            }
+            localJob = LocalJob(ctx.applicationContext, entryId, pcm, callback)
+            busyEntryId = entryId
+            localJob?.start()
+            return true
+        }
+        val key = VoicePrefs.apiKey(ctx)
+        if (key.isBlank()) {
+            callback.onFailed(entryId, "请先在设置里填语音 API Key", retryable = false)
+            return false
+        }
         job = Job(ctx.applicationContext, entryId, pcm, key, callback)
+        busyEntryId = entryId
         job?.start()
-        main.post { busyEntryId = entryId }
         return true
     }
 
     /** 用户切走 / 关面板：把正在跑的这条收掉。 */
     fun cancel() {
         job?.abandon("已取消")
+        localJob?.abandon("已取消")
     }
 
     /**
@@ -263,6 +275,75 @@ object VoiceTranscriber {
         }
     }
 
+    /**
+     * 本地重识别：读已落盘的 PCM，交给共享的 sherpa recognizer 做一次离线解码。
+     *
+     * 不建 WebSocket、不看网络；本地模式下这条路径不会再出现「正在重新识别…」
+     * 卡在等服务器。超过 [LOCAL_TIMEOUT_MS] 由看门狗收掉，界面恢复可点。
+     */
+    private class LocalJob(
+        private val ctx: Context,
+        val entryId: String,
+        private val pcm: ByteArray,
+        private val callback: Callback,
+    ) {
+        private var done = false
+        private val worker = Thread({ run() }, "jackvoice-local-retranscribe")
+        private val timeout = Runnable { fail("本地重新识别超时，请稍后再试") }
+
+        fun start() {
+            worker.start()
+            main.postDelayed(timeout, LOCAL_TIMEOUT_MS)
+        }
+
+        private fun run() {
+            val result = runCatching { LocalAsrEngine.transcribe(LocalModelManager.modelDir(ctx), pcm) }
+            main.post {
+                if (done) return@post
+                done = true
+                cleanup()
+                result
+                    .onSuccess { raw ->
+                        val processed = postProcess(ctx, raw)
+                        if (processed.isBlank()) {
+                            callback.onFailed(entryId, "这段录音里没听到人声", retryable = false)
+                        } else {
+                            callback.onDone(entryId, processed)
+                        }
+                    }.onFailure {
+                        Timber.w(it, "本地重新识别失败 $entryId")
+                        callback.onFailed(entryId, it.message ?: "本地重新识别失败", retryable = true)
+                    }
+            }
+        }
+
+        private fun fail(message: String) {
+            if (done) return
+            done = true
+            main.removeCallbacks(timeout)
+            cleanup()
+            callback.onFailed(entryId, message, retryable = true)
+        }
+
+        fun abandon(reason: String) = fail(reason)
+
+        private fun cleanup() {
+            main.post {
+                if (VoiceTranscriber.localJob === this) VoiceTranscriber.localJob = null
+                busyEntryId = null
+            }
+        }
+
+        private fun postProcess(
+            context: Context,
+            text: String,
+        ): String {
+            val mode = VoicePrefs.punctuationMode(context)
+            val processed = runCatching { PostProcessor.process(text, context) }.getOrDefault(text)
+            return runCatching { PunctuationProcessor.apply(processed, mode) }.getOrDefault(processed)
+        }
+    }
+
     private const val CHUNK_BYTES = 3_200
 
     /** 发送窗口：队列里压着的帧数低于它才继续送。 */
@@ -289,4 +370,7 @@ object VoiceTranscriber {
 
     /** 整段回放的上限。一分钟的录音通常几秒就出结果。 */
     private const val TIMEOUT_MS = 60_000L
+
+    /** 本地重识别的上限；超时后界面必须能恢复，不能一直转。 */
+    private const val LOCAL_TIMEOUT_MS = 30_000L
 }

@@ -91,6 +91,9 @@ object VoiceEngine {
 
         /** 没有网，或者连接中途断了：**只录音**，停下之后再识别。 */
         Offline,
+
+        /** 本地模型在跑，边说边出字；跟网络无关。 */
+        Local,
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -100,6 +103,12 @@ object VoiceEngine {
 
     private var recorder: VoiceRecorder? = null
     private var asr: VolcAsrClient? = null
+    private var localAsr: LocalAsrClient? = null
+
+    /** 这一轮实际用的引擎。云端/本地只在开始录音时决定，中途不切。 */
+    @Volatile
+    var engine: AsrEngine = AsrEngine.Cloud
+        private set
 
     /** 本轮音频的落盘器。null 表示这一轮存不下来（目录不可写等），识别照常。 */
     private var audio: VoiceAudio.Writer? = null
@@ -164,9 +173,14 @@ object VoiceEngine {
      */
     fun startRecording(ctx: Context): Boolean {
         if (isRecording) return false
+        val selected = VoicePrefs.engine(ctx)
         val key = VoicePrefs.apiKey(ctx)
-        if (key.isBlank()) {
+        if (selected == AsrEngine.Cloud && key.isBlank()) {
             post { listener?.onError("请先在设置里填语音 API Key") }
+            return false
+        }
+        if (selected == AsrEngine.Local && !LocalModelManager.isReady(ctx)) {
+            post { listener?.onError("本地模型还没下载好，先在键盘上点「本地」下载") }
             return false
         }
 
@@ -176,6 +190,7 @@ object VoiceEngine {
         stoppedArtifact = null
         failedEntryId = ""
         asrError = null
+        engine = selected
 
         // 先落一条空记录：这样即使下面建连就崩了，历史里也有这条「说过的话」。
         entryId =
@@ -187,17 +202,42 @@ object VoiceEngine {
                 .takeIf { it.isNotEmpty() }
                 ?.let { VoiceAudio.create(ctx, it) }
 
-        // 没网就别建连了：建也是白等十秒超时，而这十秒里用户说的话会一句不剩。
-        // 直接进「先录着」，停下之后再走重新识别那条路。
+        // 云端才看网：本地模型本来就是为了没网时用。
+        // 没网就不建连，直接进「先录着」，停下之后再走重新识别那条路。
         val online = VoiceNetwork.isOnline(ctx)
-        mode = if (online) Mode.Online else Mode.Offline
-        if (!online) {
+        mode =
+            when {
+                selected == AsrEngine.Local -> Mode.Local
+                online -> Mode.Online
+                else -> Mode.Offline
+            }
+        if (selected == AsrEngine.Cloud && !online) {
             Log.i(TAG, "当前没有网络：先录音，停止后再识别")
             asrError = "网络没连上"
         }
 
-        val client =
-            if (online) {
+        if (selected == AsrEngine.Local) {
+            Log.i(TAG, "本地识别：${LocalModelManager.modelDir(ctx).absolutePath}")
+            val local =
+                LocalAsrClient(
+                    LocalModelManager.modelDir(ctx),
+                    object : LocalAsrClient.Listener {
+                        override fun onPartial(text: String) = handlePartial(text)
+
+                        override fun onFinal(text: String) {
+                            Log.i(TAG, "本地终稿到达：${text.length} 字，停止后 ${elapsedSinceStop()}ms")
+                            handleFinal(text)
+                        }
+
+                        override fun onError(message: String) {
+                            onAsrBroken("本地识别中断：$message")
+                        }
+                    },
+                )
+            localAsr = local
+            local.start()
+        } else if (online) {
+            val client =
                 VolcAsrClient(
                     VolcAsrClient.Config(
                         apiKey = key,
@@ -206,19 +246,11 @@ object VoiceEngine {
                         boostingTableId = if (VoicePrefs.hotwordsEnabled(ctx)) VoicePrefs.boostingTableId(ctx) else "",
                     ),
                     object : VolcAsrClient.Listener {
-                        override fun onPartial(text: String) {
-                            result.setLength(0)
-                            result.append(text)
-                            post { listener?.onPartial(text) }
-                        }
+                        override fun onPartial(text: String) = handlePartial(text)
 
                         override fun onFinal(text: String) {
                             Log.i(TAG, "服务端终稿到达：${text.length} 字，停止后 ${elapsedSinceStop()}ms")
-                            if (text.isNotEmpty()) {
-                                result.setLength(0)
-                                result.append(text)
-                            }
-                            finish(fromTimeout = false)
+                            handleFinal(text)
                         }
 
                         override fun onError(message: String) {
@@ -230,25 +262,26 @@ object VoiceEngine {
                         override fun onClosed() = Unit
                     },
                 )
-            } else {
-                null
-            }
-        asr = client
-        client?.start()
+            asr = client
+            client.start()
+        }
 
         val rec =
             VoiceRecorder(
                 onChunk = {
                     audio?.write(it)
-                    client?.feed(it)
+                    asr?.feed(it)
+                    localAsr?.feed(it)
                 },
                 // 麦克风自己坏了才是真的没法继续：这一轮到此为止。
                 onError = { finishWithError(it) },
                 onLevel = { level -> post { listener?.onLevel(level) } },
             )
         if (!rec.start()) {
-            client?.cancel()
+            asr?.cancel()
+            localAsr?.cancel()
             asr = null
+            localAsr = null
             // 麦克风没起来，这条等于什么都没录到：别在历史里留空壳。
             discardCurrentEntry(ctx)
             post { listener?.onError("麦克风启动失败") }
@@ -260,6 +293,22 @@ object VoiceEngine {
         return true
     }
 
+    /** 云端/本地共用的流式结果处理：只保留最后一版，UI 也只认这一版。 */
+    private fun handlePartial(text: String) {
+        result.setLength(0)
+        result.append(text)
+        post { listener?.onPartial(text) }
+    }
+
+    /** 云端/本地共用的终稿处理。 */
+    private fun handleFinal(text: String) {
+        if (text.isNotEmpty()) {
+            result.setLength(0)
+            result.append(text)
+        }
+        finish(fromTimeout = false)
+    }
+
     /**
      * 识别这条线断了：**只把识别停掉，录音继续**。
      *
@@ -267,13 +316,16 @@ object VoiceEngine {
      * 这段声音仍然要完整地留在本机，停下之后再识别。
      */
     private fun onAsrBroken(message: String) {
-        if (asr == null && asrError != null) return
+        if (asr == null && localAsr == null && asrError != null) return
         Timber.w("识别连接断了，录音继续：$message")
         asrError = message
         mode = Mode.Offline
         val broken = asr
         asr = null
         runCatching { broken?.cancel() }
+        val brokenLocal = localAsr
+        localAsr = null
+        runCatching { brokenLocal?.cancel() }
         // 界面上要看得出来「它还在录，只是暂时不出字」，而不是停在旧预览上。
         post {
             listener?.onPartial("")
@@ -287,7 +339,8 @@ object VoiceEngine {
         isRecording = false
         isWaitingFinal = true
         stopAt = System.currentTimeMillis()
-        Log.i(TAG, "停止录音：发末包，等终稿（上限 ${FINAL_TIMEOUT_MS}ms），当前一遍结果 ${result.length} 字")
+        val waitMs = if (localAsr != null) LOCAL_FINAL_TIMEOUT_MS else FINAL_TIMEOUT_MS
+        Log.i(TAG, "停止录音：等终稿（上限 ${waitMs}ms），当前一遍结果 ${result.length} 字")
 
         // 兜底必须先挂上，再做收尾。
         //
@@ -295,7 +348,7 @@ object VoiceEngine {
         // 定时器就永远挂不上，而 isWaitingFinal 已经为 true、面板已经是 Thinking，
         // 于是卡死且没有任何恢复路径（Thinking 状态下麦克风键是空操作）。
         // 兜底排在可能失败的动作之后，就不是兜底了。
-        main.postDelayed({ finish(fromTimeout = true) }, FINAL_TIMEOUT_MS)
+        main.postDelayed({ finish(fromTimeout = true) }, waitMs)
 
         // 收尾动作各自隔离：任何一个失败都不该连累其余步骤和上面的定时器。
         runCatching { recorder?.stop() }
@@ -312,9 +365,10 @@ object VoiceEngine {
             Log.i(TAG, "录音已存：${artifact.fileName}（${artifact.durationMs}ms）")
         }
         runCatching { asr?.stop() }
+        runCatching { localAsr?.stop() }
         // 没有识别连接（一开始就没网，或者中途断了）：不必等一个不会来的终稿，
-        // 直接把这段录音安置成「可重试」。等下去只会让面板空转三秒。
-        if (asr == null && asrError != null) {
+        // 直接把这段录音安置成「可重试」。等下去只会让面板空转。
+        if (asr == null && localAsr == null && asrError != null) {
             Log.i(TAG, "本轮没有识别连接，直接收尾：$asrError")
             finish(fromTimeout = true)
             return
@@ -335,6 +389,8 @@ object VoiceEngine {
         stoppedArtifact = null
         asr?.cancel()
         asr = null
+        localAsr?.cancel()
+        localAsr = null
         result.setLength(0)
         main.removeCallbacksAndMessages(null)
         discardCurrentEntry(appContext)
@@ -362,6 +418,8 @@ object VoiceEngine {
         recorder = null
         asr?.cancel()
         asr = null
+        localAsr?.cancel()
+        localAsr = null
         result.setLength(0)
         val artifact = closedArtifact()
         val text = raw.trim()
@@ -409,6 +467,8 @@ object VoiceEngine {
         recorder = null
         asr?.cancel()
         asr = null
+        localAsr?.cancel()
+        localAsr = null
         result.setLength(0)
         isRecording = false
         isWaitingFinal = false
@@ -508,6 +568,9 @@ object VoiceEngine {
 
     private const val TAG = "JackVoice"
 
-    /** 停止录音后等二遍终稿的上限。 */
+    /** 停止录音后等云端二遍终稿的上限。 */
     private const val FINAL_TIMEOUT_MS = 3000L
+
+    /** 本地没有网络往返，但可能要排完队里最后几块音频；给 5 秒。 */
+    private const val LOCAL_FINAL_TIMEOUT_MS = 5000L
 }

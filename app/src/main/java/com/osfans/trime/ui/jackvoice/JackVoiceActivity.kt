@@ -34,9 +34,11 @@ import com.osfans.trime.BuildConfig
 import com.osfans.trime.R
 import com.osfans.trime.data.prefs.AppPrefs
 import com.osfans.trime.data.prefs.AppearanceManager
+import com.osfans.trime.ime.voice.AsrEngine
 import com.osfans.trime.ime.voice.GlossarySyncClient
 import com.osfans.trime.ime.voice.GlossarySyncManager
 import com.osfans.trime.ime.voice.HotwordTableSync
+import com.osfans.trime.ime.voice.LocalModelManager
 import com.osfans.trime.ime.voice.PunctuationMode
 import com.osfans.trime.ime.voice.VoiceAudio
 import com.osfans.trime.ime.voice.VoiceAudioPlayer
@@ -353,7 +355,11 @@ class JackVoiceActivity :
         if (!isImeEnabled()) missing += "启用输入法"
         if (!isImeDefault()) missing += "设为默认输入法"
         if (!hasMic()) missing += "麦克风权限"
-        if (VoicePrefs.apiKey(this).isBlank()) missing += "填 API Key"
+        if (VoicePrefs.engine(this) == AsrEngine.Local) {
+            if (!LocalModelManager.isReady(this)) missing += "下载本地模型"
+        } else if (VoicePrefs.apiKey(this).isBlank()) {
+            missing += "填 API Key"
+        }
         return if (missing.isEmpty()) {
             "打字用「拼」「EN」，说话点中间的大圆，文字会自己落进当前输入框。"
         } else {
@@ -733,6 +739,35 @@ class JackVoiceActivity :
     }
 
     private fun toast(msg: String) = android.widget.Toast.makeText(this, msg, android.widget.Toast.LENGTH_SHORT).show()
+
+    /** 设置页里切引擎；本地模型没装好就先下载，不把用户丢进一个跑不起来的模式。 */
+    private fun toggleAsrEngine() {
+        if (VoicePrefs.engine(this) == AsrEngine.Local) {
+            VoicePrefs.setEngine(this, AsrEngine.Cloud)
+            toast("已切到云端识别")
+            select(Tab.Settings)
+            return
+        }
+        if (!LocalModelManager.isReady(this)) {
+            downloadLocalModel()
+            return
+        }
+        VoicePrefs.setEngine(this, AsrEngine.Local)
+        toast("已切到本地识别")
+        select(Tab.Settings)
+    }
+
+    private fun downloadLocalModel() {
+        val status = LocalModelManager.status(this)
+        when {
+            LocalModelManager.isReady(this) -> toast("本地模型已安装，可在键盘左上角切到本地")
+            status.state == LocalModelManager.State.Downloading -> toast("本地模型正在下载 ${status.progress}%")
+            else -> {
+                LocalModelManager.ensure(this)
+                toast("开始下载本地模型（约 128MB），完成后在键盘左上角切到本地")
+            }
+        }
+    }
 
     /**
      * 热词改动后同步整张云端热词表；没配置表 ID 时只保存在本地。
@@ -1287,6 +1322,39 @@ class JackVoiceActivity :
                 trailing = null,
                 chevron = true,
             ) { editKeyDialog() },
+        )
+        voice.addView(Jv.divider(this))
+        val engine = VoicePrefs.engine(this)
+        voice.addView(
+            Jv.row(
+                this,
+                "识别引擎",
+                "云端实时预览；本地离线识别；键盘左上角也能切",
+                trailing = engine.label,
+                chevron = true,
+            ) { toggleAsrEngine() },
+        )
+        voice.addView(Jv.divider(this))
+        val modelStatus = LocalModelManager.status(this)
+        val modelReady = LocalModelManager.isReady(this)
+        voice.addView(
+            Jv.row(
+                this,
+                "本地模型",
+                if (modelReady) {
+                    "X-ASR 480ms，已安装，可离线识别"
+                } else {
+                    "X-ASR 480ms，约 128MB，下载后可离线识别"
+                },
+                trailing =
+                    when (modelStatus.state) {
+                        LocalModelManager.State.Downloading -> "${modelStatus.progress}%"
+                        LocalModelManager.State.Ready -> "已安装"
+                        LocalModelManager.State.Failed -> "重试"
+                        LocalModelManager.State.Missing -> "下载"
+                    },
+                chevron = true,
+            ) { downloadLocalModel() },
         )
         voice.addView(Jv.divider(this))
         voice.addView(

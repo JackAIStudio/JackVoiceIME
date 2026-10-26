@@ -88,6 +88,9 @@ object VoiceSession : VoiceEngine.Listener {
     /** 主线程队列：识别回调来自 OkHttp 线程，见 [post]。 */
     private val main = Handler(Looper.getMainLooper())
 
+    /** 「正在重新识别」最多让用户等这么久；到点强制恢复可操作。 */
+    private const val RETRY_UI_TIMEOUT_MS = 30_000L
+
     /**
      * 窗口是短期对象（主题切换会重建 InputView），用弱引用收着：
      * 窗口正常 detach 时会自己摘掉；漏掉的那个也不会把整个窗口钉在内存里。
@@ -142,6 +145,9 @@ object VoiceSession : VoiceEngine.Listener {
     @Volatile
     var retryingEntryId: String? = null
         private set
+
+    /** 重新识别的 UI 看门狗：到点还没回调就主动收掉，别让面板一直转。 */
+    private var retryWatchdog: Runnable? = null
 
     /**
      * 最近一次失败、且音频还在的那个条目。
@@ -215,8 +221,7 @@ object VoiceSession : VoiceEngine.Listener {
         pending.setLength(0)
         inMemoryRetryId = null
         // 输入法都没了，正在跑的那条转写也没人接结果：连进度标记一起清掉。
-        // 漏掉这两个，服务重建后界面会一直停在「正在重新识别…」——
-        // 实测踩过：明明早就没有任务在跑，面板上那句话一直挂着。
+        disarmRetryWatchdog()
         retryingEntryId = null
         preview = null
         // 转写任务本身也要掐掉，否则它跑完还会回调一个已经销毁的 svc。
@@ -309,6 +314,7 @@ object VoiceSession : VoiceEngine.Listener {
         asrNotice = ""
         inMemoryRetryId = null
         preview = null
+        disarmRetryWatchdog()
         retryingEntryId = null
         pending.setLength(0)
         notifyState()
@@ -418,8 +424,46 @@ object VoiceSession : VoiceEngine.Listener {
      */
     fun clearStaleRetrying() {
         if (retryingEntryId == null) return
+        disarmRetryWatchdog()
         retryingEntryId = null
         notifyState()
+    }
+
+    /**
+     * 用户点「取消」或 UI 看门狗到点：立刻把界面从「正在重新识别…」里拉出来。
+     *
+     * 不能只依赖 [VoiceTranscriber] 的回调——它可能在等一个永远不来的 WebSocket
+     * 终稿；界面必须先恢复，任务在后台慢慢收。
+     */
+    fun cancelRetry() {
+        val id = retryingEntryId ?: return
+        disarmRetryWatchdog()
+        retryingEntryId = null
+        inMemoryRetryId = id
+        runCatching { VoiceTranscriber.cancel() }
+        notifyState()
+        activeListeners().forEach { it.onVoiceNotice("已取消重新识别") }
+    }
+
+    private fun armRetryWatchdog(entryId: String) {
+        disarmRetryWatchdog()
+        val watchdog =
+            Runnable {
+                if (retryingEntryId != entryId) return@Runnable
+                Timber.w("重新识别看门狗触发，界面强制恢复：$entryId")
+                retryingEntryId = null
+                inMemoryRetryId = entryId
+                runCatching { VoiceTranscriber.cancel() }
+                notifyState()
+                activeListeners().forEach { it.onVoiceNotice("重新识别超时，已停止，可重试") }
+            }
+        retryWatchdog = watchdog
+        main.postDelayed(watchdog, RETRY_UI_TIMEOUT_MS)
+    }
+
+    private fun disarmRetryWatchdog() {
+        retryWatchdog?.let { main.removeCallbacks(it) }
+        retryWatchdog = null
     }
 
     /**
@@ -455,6 +499,9 @@ object VoiceSession : VoiceEngine.Listener {
                         text: String,
                     ) {
                         post {
+                            // 用户已经点了取消 / 看门狗已经收尾：结果不要了。
+                            if (retryingEntryId != entryId) return@post
+                            disarmRetryWatchdog()
                             // 补出来了就不再挂着那个按钮。
                             if (inMemoryRetryId == entryId) inMemoryRetryId = null
                             retryingEntryId = null
@@ -472,6 +519,9 @@ object VoiceSession : VoiceEngine.Listener {
                         retryable: Boolean,
                     ) {
                         post {
+                            // 界面已经先恢复了（取消 / 超时）：迟到的失败回调不要再改写。
+                            if (retryingEntryId != entryId) return@post
+                            disarmRetryWatchdog()
                             retryingEntryId = null
                             // 写进记录时要**如实**分状态。
                             //
@@ -506,6 +556,7 @@ object VoiceSession : VoiceEngine.Listener {
             )
         if (started) {
             retryingEntryId = entryId
+            armRetryWatchdog(entryId)
             val entry = runCatching { VoiceHistory.find(svc, entryId) }.getOrNull()
             val whenText =
                 entry?.let {

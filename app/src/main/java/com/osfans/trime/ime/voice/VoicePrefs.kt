@@ -22,6 +22,7 @@ object VoicePrefs {
     const val KEY_BOOSTING_TABLE_ID = "voice_boosting_table_id"
     const val KEY_HOTWORDS_ENABLED = "voice_hotwords_enabled"
     const val KEY_MUTE_OTHER_AUDIO = "voice_mute_other_audio"
+    const val KEY_ASR_ENGINE = "voice_asr_engine"
     const val KEY_PUNCTUATION_MODE = "voice_punctuation_mode"
     const val KEY_LAST_TAB = "voice_last_tab"
     const val KEY_TOS_ACCESS_KEY = "voice_tos_access_key"
@@ -62,6 +63,15 @@ object VoicePrefs {
         ctx: Context,
         value: Boolean,
     ) = prefs(ctx).edit { putBoolean(KEY_MUTE_OTHER_AUDIO, value) }
+
+    /** 当前听写引擎。默认云端；本地模型没装好时由界面回退到云端。 */
+    fun engine(ctx: Context): AsrEngine =
+        AsrEngine.fromId(prefs(ctx).getString(KEY_ASR_ENGINE, null))
+
+    fun setEngine(
+        ctx: Context,
+        engine: AsrEngine,
+    ) = prefs(ctx).edit { putString(KEY_ASR_ENGINE, engine.id) }
 
     /** 默认全标点：第一次用不丢东西，要改在键盘左下角一点就切。 */
     fun punctuationMode(ctx: Context): PunctuationMode = PunctuationMode.fromId(prefs(ctx).getString(KEY_PUNCTUATION_MODE, null))

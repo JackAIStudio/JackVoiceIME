@@ -112,6 +112,15 @@ android {
     }
 
     packaging {
+        // sherpa-onnx AAR 里带 c-api / cxx-api 两套 .so，App 只用 JNI 那套。
+        // 不排掉的话每个 ABI 会多背 4–5MB，四个 split 全涨。
+        jniLibs {
+            excludes +=
+                setOf(
+                    "**/libsherpa-onnx-c-api.so",
+                    "**/libsherpa-onnx-cxx-api.so",
+                )
+        }
         resources {
             excludes +=
                 setOf(
@@ -149,6 +158,10 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.okhttp)
     implementation("com.volcengine:ve-tos-android-sdk:2.9.4")
+    // 本地识别：sherpa-onnx 官方 AAR（没有 Maven 坐标，随仓库带一份）
+    implementation(files("libs/sherpa-onnx-1.13.8.aar"))
+    // 模型是 .tar.bz2，Android 自带的 GZIP 解不了 bzip2
+    implementation("org.apache.commons:commons-compress:1.27.1")
     implementation(libs.androidx.activity)
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.autofill)

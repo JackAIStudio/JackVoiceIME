@@ -61,6 +61,12 @@ class VoicePanelView(
     var onActionTap: (() -> Unit)? = null
     var onRetryTap: (() -> Unit)? = null
 
+    /** 重新识别时的「取消」：不能让人对着进度干等。 */
+    var onRetryCancel: (() -> Unit)? = null
+
+    /** 点左上角的「云端 / 本地」方块。窗口负责下载、落盘、提示。 */
+    var onEngineTap: (() -> Unit)? = null
+
     /** 预览卡片上的「插入」/「丢弃」。 */
     var onPreviewCommit: (() -> Unit)? = null
     var onPreviewDiscard: (() -> Unit)? = null
@@ -72,6 +78,29 @@ class VoicePanelView(
         }
 
     private var state = VoiceState.Idle
+
+    private var engine = AsrEngine.Cloud
+
+    /**
+     * 左上角的引擎方块。只做一件事：告诉用户这一轮会走云端还是本地，
+     * 点一下交给 [VoiceWindow] 切换。不做下拉菜单——两颗状态不值得再开一层。
+     *
+     * 放左上角而不是右上角：右边要留给「拼 / EN / 收起」那一排胶囊，
+     * 再加一颗会挤；左边品牌下面本来就是空的，56dp 方块正好落在
+     * 麦克风圆左侧，不抢触摸。
+     */
+    private val engineView =
+        TextView(context).apply {
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            gravity = Gravity.CENTER
+            includeFontPadding = false
+            background = roundedDrawable(JvColors.keyBg, dp(16))
+            isClickable = true
+            setOnClickListener {
+                InputFeedbackManager.keyPressVibrate(this)
+                onEngineTap?.invoke()
+            }
+        }
 
     private val statusView =
         TextView(context).apply {
@@ -167,6 +196,27 @@ class VoicePanelView(
             gravity = Gravity.CENTER
             text = "正在重新识别…"
             visibility = GONE
+        }
+
+    /**
+     * 重新识别没有进度、也没有终点的承诺；给一颗明确的「取消」，
+     * 用户不用等 30 秒看门狗，也不用去猜麦克风为什么不见了。
+     */
+    private val retryCancelView =
+        TextView(context).apply {
+            text = "取消"
+            setTextColor(JvColors.accent)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+            gravity = Gravity.CENTER
+            includeFontPadding = false
+            setPadding(dp(16), 0, dp(16), 0)
+            background = roundedDrawable(JvColors.keyBg, dp(13))
+            isClickable = true
+            visibility = GONE
+            setOnClickListener {
+                InputFeedbackManager.keyPressVibrate(this)
+                onRetryCancel?.invoke()
+            }
         }
 
     private val previewText =
@@ -385,6 +435,15 @@ class VoicePanelView(
         )
 
         addView(
+            engineView,
+            LayoutParams(dp(56), dp(56)).apply {
+                gravity = Gravity.TOP or Gravity.START
+                topMargin = dp(58)
+                marginStart = dp(15)
+            },
+        )
+
+        addView(
             statusView,
             LayoutParams(LayoutParams.WRAP_CONTENT, dp(22)).apply {
                 gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
@@ -400,6 +459,14 @@ class VoicePanelView(
                 topMargin = dp(97)
             },
         )
+        addView(
+            retryCancelView,
+            LayoutParams(LayoutParams.WRAP_CONTENT, dp(28)).apply {
+                gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                topMargin = dp(126)
+            },
+        )
+
         addView(
             previewCard,
             // 预览是「决定时刻」：这期间麦克风和底栏都没有意义，
@@ -469,6 +536,7 @@ class VoicePanelView(
             },
         )
 
+        setEngine(AsrEngine.Cloud)
         setState(VoiceState.Idle)
     }
 
@@ -597,6 +665,7 @@ class VoicePanelView(
     fun setRetrying(busy: Boolean) {
         if (state != VoiceState.Idle) return
         retryingView.visibility = if (busy) VISIBLE else GONE
+        retryCancelView.visibility = if (busy) VISIBLE else GONE
         if (busy) {
             // 跑的时候把麦克风、提示、底栏都让开，只留进度。
             statusView.visibility = GONE
@@ -681,6 +750,19 @@ class VoicePanelView(
 
     fun setActionLabel(label: String) {
         actionKey.text = label
+    }
+
+    /** 窗口展开 / 切回面板时同步引擎。 */
+    fun setEngine(engine: AsrEngine) {
+        this.engine = engine
+        refreshEngineLabel()
+    }
+
+    private fun refreshEngineLabel() {
+        engineView.text = engine.label
+        engineView.setTextColor(JvColors.text)
+        engineView.contentDescription = "识别引擎：${engine.label}，点按切换"
+        engineView.background = roundedDrawable(JvColors.keyBg, dp(16))
     }
 
     /** 窗口展开 / 切回面板时同步当前档位；键面文字和强调色一起更新。 */
@@ -852,7 +934,10 @@ class VoicePanelView(
     fun refreshColors() {
         setBackgroundColor(JvColors.keyboardBg)
         toolbar.refreshColors()
+        refreshEngineLabel()
         statusView.setTextColor(JvColors.textSecondary)
+        retryCancelView.setTextColor(JvColors.accent)
+        retryCancelView.background = roundedDrawable(JvColors.keyBg, dp(13))
         hintView.setTextColor(JvColors.textSecondary)
         previewView.setTextColor(JvColors.text)
         previewView.background = roundedDrawable(JvColors.keyBg, dp(16))

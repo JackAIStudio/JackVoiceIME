@@ -43,6 +43,39 @@ class VoiceWindow(di: DI) :
     private var panel: VoicePanelView? = null
     private var noticeJob: Job? = null
 
+    /** 用户点了「本地」但模型还没下载完：就绪后自动切过去。 */
+    private var pendingLocal = false
+
+    private val localModelListener =
+        LocalModelManager.Listener { status ->
+            val view = panel ?: return@Listener
+            when (status.state) {
+                LocalModelManager.State.Downloading -> {
+                    if (pendingLocal && VoiceSession.state == VoiceState.Idle) {
+                        view.showMessage("本地模型下载 ${status.progress}%")
+                    }
+                }
+
+                LocalModelManager.State.Ready -> {
+                    if (pendingLocal) {
+                        pendingLocal = false
+                        VoicePrefs.setEngine(context, AsrEngine.Local)
+                        view.setEngine(AsrEngine.Local)
+                        view.showMessage("本地模型已就绪，已切到本地")
+                    }
+                }
+
+                LocalModelManager.State.Failed -> {
+                    if (pendingLocal) {
+                        pendingLocal = false
+                        view.showMessage("本地模型下载失败：${status.message}")
+                    }
+                }
+
+                LocalModelManager.State.Missing -> Unit
+            }
+        }
+
     companion object : ResidentWindow.Key
 
     override val key: ResidentWindow.Key
@@ -58,6 +91,7 @@ class VoiceWindow(di: DI) :
         view.onSpaceSlide = { dx, dy -> service.moveCursorBy(dx, dy) }
         view.onBackspaceTap = { service.sendDownUpKeyEvents(KeyEvent.KEYCODE_DEL) }
         view.onActionTap = { performEditorAction() }
+        view.onEngineTap = { onEngineTap() }
         // 顶部切换胶囊的「拼」/「EN」：切到拼音/英文键盘，并同步 Rime 的 ascii_mode。
         // 注意**不要**在这里 cancel 听写——手动拼写和听写是并行的两件事。
         view.toolbar.onPinyinTap = {
@@ -76,6 +110,7 @@ class VoiceWindow(di: DI) :
         view.toolbar.onHideTap = { service.requestHideSelf(0) }
         // 上一轮识别失败时，这段录音还在本地：点一下就地再识别，不用去历史页翻。
         view.onRetryTap = { onRetryTap() }
+        view.onRetryCancel = { VoiceSession.cancelRetry() }
         // 重新识别的结果不自动上屏：先在这张卡片上给用户看一眼，他点「插入」才落。
         view.onPreviewCommit = { VoiceSession.commitPreview() }
         view.onPreviewDiscard = { VoiceSession.discardPreview() }
@@ -93,6 +128,8 @@ class VoiceWindow(di: DI) :
 
     override fun onAttached() {
         VoiceSession.addListener(this)
+        LocalModelManager.addListener(localModelListener)
+        syncEngine()
         panel?.setActionLabel(actionLabel())
         panel?.toolbar?.setActive(VoiceTab.Voice)
         // 设置页可能刚改过标点；回到面板时同步一次。
@@ -109,6 +146,7 @@ class VoiceWindow(di: DI) :
     override fun onDetached() {
         // 只解绑 UI，**不动**听写会话：切到键盘后录音/识别继续。
         VoiceSession.removeListener(this)
+        LocalModelManager.removeListener(localModelListener)
         noticeJob?.cancel()
         panel?.setLevel(0f)
     }
@@ -179,6 +217,9 @@ class VoiceWindow(di: DI) :
         val view = panel ?: return
         view.showMessage(text)
         syncRetryButton()
+        // 「正在重新识别…」不是普通提示：它要把麦克风、底栏让开，
+        // 并亮出「取消」。只写 showMessage 会留下一个可点的麦克风，用户更迷惑。
+        syncRetrying(view)
         noticeJob?.cancel()
         noticeJob =
             service.lifecycleScope.launch {
@@ -188,6 +229,54 @@ class VoiceWindow(di: DI) :
                     syncRetryButton()
                 }
             }
+    }
+
+    // ── 引擎切换 ────────────────────────────────────────────────────────
+
+    /** 以「模型真的在不在」为准修正落盘值，避免设置里留着 local、实际却跑不起来。 */
+    private fun syncEngine() {
+        val ready = LocalModelManager.isReady(context)
+        val saved = VoicePrefs.engine(context)
+        val effective = if (saved == AsrEngine.Local && ready) AsrEngine.Local else AsrEngine.Cloud
+        if (saved != effective) VoicePrefs.setEngine(context, effective)
+        panel?.setEngine(effective)
+    }
+
+    private fun onEngineTap() {
+        if (VoiceSession.state != VoiceState.Idle) {
+            panel?.showMessage("说完这一轮再切识别引擎")
+            return
+        }
+        if (VoiceSession.retryingEntryId != null) {
+            panel?.showMessage("先取消重新识别，再切引擎")
+            return
+        }
+        when (VoicePrefs.engine(context)) {
+            AsrEngine.Cloud -> {
+                if (LocalModelManager.isReady(context)) {
+                    VoicePrefs.setEngine(context, AsrEngine.Local)
+                    panel?.setEngine(AsrEngine.Local)
+                    panel?.showMessage("已切到本地识别")
+                } else {
+                    pendingLocal = true
+                    val ready = LocalModelManager.ensure(context)
+                    if (ready) {
+                        pendingLocal = false
+                        VoicePrefs.setEngine(context, AsrEngine.Local)
+                        panel?.setEngine(AsrEngine.Local)
+                        panel?.showMessage("已切到本地识别")
+                    } else {
+                        panel?.showMessage("正在下载本地模型（约 128MB）")
+                    }
+                }
+            }
+
+            AsrEngine.Local -> {
+                VoicePrefs.setEngine(context, AsrEngine.Cloud)
+                panel?.setEngine(AsrEngine.Cloud)
+                panel?.showMessage("已切到云端识别")
+            }
+        }
     }
 
     // ── 麦克风键 ────────────────────────────────────────────────────────

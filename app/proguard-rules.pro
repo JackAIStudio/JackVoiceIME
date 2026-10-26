@@ -11,6 +11,9 @@
 # Keep JNI interface
 -keep class com.osfans.trime.core.* { *; }
 
+# sherpa-onnx 的 Java/Kotlin 类由 JNI 反查，不能混淆/裁剪
+-keep class com.k2fsa.sherpa.onnx.** { *; }
+
 # remove kotlin null checks
 -assumenosideeffects class kotlin.jvm.internal.Intrinsics {
     static void checkNotNull(...);

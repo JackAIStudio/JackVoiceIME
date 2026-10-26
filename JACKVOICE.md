@@ -115,9 +115,34 @@ q w e r t y u i o p        ← 按键
 ## 语音链路
 
 ```
-点大圆 → 麦克风前台服务 → 16kHz 单声道录音 → 豆包流式（59 条热词）
+点大圆 → 麦克风前台服务 → 16kHz 单声道录音 → 云端豆包流式（59 条热词）
       → 二遍终稿 → 76 条替换规则 → 标点档位处理 → commitText 落到当前输入框
+
+                           或
+
+点大圆 → 麦克风前台服务 → 16kHz 单声道录音 → 本地 X-ASR 480ms int8（2 线程）
+      → 流式终稿 → 替换规则 → 标点档位处理 → commitText
 ```
+
+### 云端 / 本地切换
+
+语音面板左上角有一颗 56dp 的 `云端 / 本地` 方块，点一下切换；设置页「语音识别 → 识别引擎」
+是同一个偏好（`VoicePrefs.engine`）。**引擎在开始录音时定下，中途不切**，避免同一个
+会话里两套结果打架。
+
+- 云端：现有豆包链路，需要 API Key；没网时仍会先录音，停下后走重新识别。
+- 本地：sherpa-onnx + X-ASR，不需要 API Key，没网也能出字。模型首次点「本地」时下载
+  （约 128MB，解压后约 175MB），之后从 `filesDir/local_asr/x-asr-480ms-int8-…` 读取。
+- 模型没装好时点「本地」会先下载，下载完成自动切过去；点回来就回云端。
+- 本地模型加载约 2–3 秒（首次），之后同进程复用；2 线程 CPU 推理，实测计算
+  RTF ≈ 0.1（Turbo 5），停止后终稿约 150–250ms。手机上没有可用的联发科 NPU 路径，
+  不要指望 QNN。
+- 本地不做热词，也不适合 APP 名/数字/网址：这些仍走云端或后续的词典后处理。
+- 模型 tar 是 bzip2，Android 解压慢（首次约几分钟），所以不要把它塞进 APK；
+  AAR 在 `app/libs/sherpa-onnx-1.13.8.aar`，只保留 JNI + onnxruntime 两个 .so。
+
+`VoiceEngine` 里云端与本地各一个客户端，共用 `handlePartial/handleFinal`；
+`VoiceTranscriber`（历史里的重新识别）会看当前引擎：云端走火山，本地走本地模型。
 
 录音圆里的波形跟着真实音量走：`VoiceLevel` 用每块 PCM 的 RMS 减去一条会自己跟的
 底噪线（预热 3 块，静音时必须是 0），不再用 `sin(t)` 假动画——停嘴之后柱子就停在
@@ -139,11 +164,20 @@ q w e r t y u i o p        ← 按键
 | `VoiceAudio` | 16k/16bit/单声道 WAV 写入器。44 字节头先占位，每块 PCM 直接 `RandomAccessFile` 写进去（不经用户态缓冲，进程被杀也留得住），收尾回填长度。录到一半中断留下 `.part`，下次启动 `recoverInterrupted` 修好并交给 `VoiceHistory.adoptOrphans` 补一条失败记录 |
 | `VoiceHistory` | 记录状态机：`recording → transcribing → completed / failed / no_network / empty`。**先建记录再谈识别**——失败的那条也留在历史里，带音频路径 |
 | `VoiceEngine` | 同一块 PCM 走两条路：写盘 + 喂识别。写盘失败不拖累识别；`cancel()`（用户明确不要）是**唯一**会删音频的路径 |
-| `VoiceTranscriber` | 把已存的 PCM 回放进同一条流式通道重新识别。3200 字节一块、10ms 间隔、发送队列超窗口就等（对齐桌面版 `transcribe_pcm`） |
+| `VoiceTranscriber` | 把已存的 PCM 重新送进识别。云端仍是 3200 字节一块、10ms 间隔的流式回放；本地则直接走 `LocalAsrEngine.transcribe`，不建 WebSocket |
 
 **不做自动重试。** 手机上只在用户点的时候跑：语音面板上那颗小圆刷新按钮
 （`ic_baseline_refresh_reversed_24`，40dp）、历史页里的「重新转写」。
 服务端明确说这段没人说话（`empty`）之后按钮就收起来，别让人反复点同一个空结果。
+
+**但重识别必须有兜底。** 它可能卡在等一个永远不来的 WebSocket 终稿，面板不能
+只挂一句「正在重新识别…」：
+
+- 进度界面现在会亮出一颗「取消」，点一下立刻回到空闲，任务在后台收；
+- 30 秒 UI 看门狗（`VoiceSession.RETRY_UI_TIMEOUT_MS`）到点强制恢复，提示
+  「重新识别超时，已停止，可重试」；
+- 重识别期间禁止切云端/本地，避免「界面显示本地、任务却在云端」；
+- 本地引擎的重识别走本地模型，不再因为断网去连火山。
 
 ### 「没听到人声」只能由服务端下结论
 
