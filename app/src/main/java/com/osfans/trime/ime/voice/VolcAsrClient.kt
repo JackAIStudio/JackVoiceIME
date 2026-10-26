@@ -42,11 +42,23 @@ class VolcAsrClient(
         fun onFinal(text: String)
         fun onError(message: String)
         fun onClosed()
+
+        /**
+         * 连接已建立、可以开始灌音频了。
+         *
+         * 现场录音不需要它（音频本来就是一秒十块地来），但**回放已存录音**必须等：
+         * 一次性把整段 PCM 灌进 [feed] 会撑爆预缓冲（[MAX_PREBUFFER_CHUNKS]），
+         * 开头那段就被丢掉了。
+         */
+        fun onOpen() {}
     }
 
     companion object {
         private const val TAG = "JackVoice"
         private const val MAX_PREBUFFER_CHUNKS = 300
+
+        /** 发送队列里最多攒多少帧。回放整段录音时用来控速：不丢音频，只推迟。 */
+        private const val MAX_QUEUED_FRAMES = 64L
     }
 
     private val client: OkHttpClient = OkHttpClient.Builder()
@@ -101,10 +113,15 @@ class VolcAsrClient(
                 webSocket.send(frame.toByteString())
                 seq += 1
                 audioReady = true
-                flushPrebuffer()
                 if (stopPending) {
+                    // 用户已经点了停止（或者整段录音的回放已经灌完）：
+                    // 先把缓冲灌完再发末包，顺序不能反。
                     stopPending = false
+                    flushPrebuffer()
                     sendLastFrame()
+                } else {
+                    flushPrebuffer()
+                    listener.onOpen()
                 }
             }
 
@@ -185,18 +202,28 @@ class VolcAsrClient(
     private fun elapsedSinceStop(): Long =
         if (stopAt > 0) System.currentTimeMillis() - stopAt else -1L
 
-    /** 送一帧 PCM（16kHz / 16bit / 单声道）。建连期间先缓冲，避免开头丢失。 */
-    fun feed(pcm: ByteArray) {
-        if (audioReady) {
-            sendAudio(pcm)
-        } else {
+    /**
+     * 送一帧 PCM（16kHz / 16bit / 单声道）。建连期间先缓冲，避免开头丢失。
+     *
+     * @return 真的进去了才为 true。发送队列满时返回 false——回放整段录音的
+     *         调用方据此稍后再送，**不能当成已经送出去**，否则末包会抢在前面。
+     */
+    fun feed(pcm: ByteArray): Boolean {
+        if (closed) return false
+        if (!audioReady) {
             prebuffer.addLast(pcm)
             if (prebuffer.size > MAX_PREBUFFER_CHUNKS) prebuffer.removeFirst()
+            return true
         }
+        return sendAudio(pcm)
     }
 
-    private fun sendAudio(pcm: ByteArray) {
-        val socket = ws ?: return
+    private fun sendAudio(pcm: ByteArray): Boolean {
+        val socket = ws ?: return false
+        if (closed) return false
+        // 对方还没接住上一批时先攥着：回放整段录音会把几百块一次灌进来，
+        // 无脑 send 只会把 OkHttp 的发送队列撑爆。
+        if (socket.queueSize() > MAX_QUEUED_FRAMES) return false
         val payload = VolcProtocol.gzip(pcm)
         val frame = VolcProtocol.buildFrame(
             VolcProtocol.MSG_AUDIO_ONLY,
@@ -205,13 +232,24 @@ class VolcAsrClient(
             VolcProtocol.COMPRESSION_GZIP,
             payload,
         )
-        socket.send(frame.toByteString())
-        seq += 1
+        return try {
+            socket.send(frame.toByteString())
+            seq += 1
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "发送音频帧失败：${e.message}")
+            false
+        }
     }
+
+    /** 回放整段录音时用：发送队列里还压着多少帧，调用方据此控速。 */
+    fun queuedFrames(): Long = ws?.queueSize() ?: 0L
 
     private fun flushPrebuffer() {
         while (prebuffer.isNotEmpty()) {
-            sendAudio(prebuffer.removeFirst())
+            val chunk = prebuffer.first()
+            if (!sendAudio(chunk)) break
+            prebuffer.removeFirst()
         }
     }
 
@@ -228,6 +266,7 @@ class VolcAsrClient(
 
     private fun sendLastFrame() {
         val socket = ws ?: return
+        if (closed) return
         flushPrebuffer()
         val payload = VolcProtocol.gzip(ByteArray(0))
         val frame = VolcProtocol.buildFrame(
@@ -237,13 +276,14 @@ class VolcAsrClient(
             VolcProtocol.COMPRESSION_GZIP,
             payload,
         )
-        socket.send(frame.toByteString())
+        runCatching { socket.send(frame.toByteString()) }
+            .onFailure { Log.w(TAG, "发末包失败：${it.message}") }
         Log.i(TAG, "已发末包 seq=-$seq，等二遍终稿")
     }
 
     fun cancel() {
         closed = true
-        runCatching { ws?.close(1000, "cancel") }
+        runCatching { ws?.cancel() }
         runCatching { client.dispatcher.executorService.shutdown() }
         ws = null
         audioReady = false

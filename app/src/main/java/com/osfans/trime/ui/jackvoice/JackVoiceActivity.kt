@@ -37,10 +37,13 @@ import com.osfans.trime.ime.voice.GlossarySyncClient
 import com.osfans.trime.ime.voice.GlossarySyncManager
 import com.osfans.trime.ime.voice.HotwordTableSync
 import com.osfans.trime.ime.voice.PunctuationMode
+import com.osfans.trime.ime.voice.VoiceAudio
+import com.osfans.trime.ime.voice.VoiceAudioPlayer
 import com.osfans.trime.ime.voice.VoiceDictionary
 import com.osfans.trime.ime.voice.VoiceHistory
 import com.osfans.trime.ime.voice.VoicePrefs
 import com.osfans.trime.ime.voice.VoiceStats
+import com.osfans.trime.ime.voice.VoiceTranscriber
 import com.osfans.trime.ui.main.MainActivity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -137,6 +140,8 @@ class JackVoiceActivity :
 
         setContentView(root)
         GlossarySyncManager.addListener(this)
+        // 切到别的 Tab 时历史卡片会被重建：播放器回调要跟着换一批控件。
+        VoiceAudioPlayer.addListener(audioPlayerListener)
         select(currentTab)
     }
 
@@ -161,11 +166,14 @@ class JackVoiceActivity :
     override fun onPause() {
         syncTicker?.cancel()
         syncTicker = null
+        // 离开 App（或切走）就别在后台接着放录音。
+        VoiceAudioPlayer.stop()
         super.onPause()
     }
 
     override fun onDestroy() {
         GlossarySyncManager.removeListener(this)
+        VoiceAudioPlayer.removeListener(audioPlayerListener)
         super.onDestroy()
     }
 
@@ -220,6 +228,8 @@ class JackVoiceActivity :
     }
 
     private fun select(tab: Tab) {
+        // 卡片一换就没人管那条播放中的录音了：先停掉，别让声音留在后台。
+        if (tab != Tab.History && VoiceAudioPlayer.playingEntryId != null) VoiceAudioPlayer.stop()
         currentTab = tab
         Tab.entries.forEachIndexed { i, t ->
             val (icon, label) = barItems[i].second
@@ -369,28 +379,82 @@ class JackVoiceActivity :
 
     // ── 历史记录 ────────────────────────────────────────────────────────
 
+    /** 正在重新识别的那条（界面上只标它一个，别让用户猜是哪条）。 */
+    private var retryingEntryId: String? = null
+
+    /** 每条记录卡片上的播放/进度控件，播放器回调统一刷新它们。 */
+    private val playControls = mutableListOf<PlayControl>()
+
+    private class PlayControl(
+        val entryId: String,
+        val icon: android.widget.ImageView,
+        val progress: android.widget.ProgressBar,
+        val duration: TextView,
+    )
+
+    private val audioPlayerListener =
+        object : VoiceAudioPlayer.Listener {
+            override fun onPlayerChanged(
+                playingEntryId: String?,
+                progress: Float,
+            ) {
+                val ctx = this@JackVoiceActivity
+                playControls.forEach { c ->
+                    val playing = c.entryId == playingEntryId
+                    c.icon.setImageResource(
+                        if (playing) R.drawable.ic_baseline_pause_24 else R.drawable.ic_baseline_play_arrow_24,
+                    )
+                    c.icon.setColorFilter(if (playing) Jv.ACCENT else Jv.TEXT2)
+                    c.progress.progress = (progress * 1000).toInt()
+                    c.progress.visibility = if (playing) View.VISIBLE else View.GONE
+                    val entry = VoiceHistory.find(ctx, c.entryId)
+                    val ms = entry?.durationMs ?: 0L
+                    c.duration.text =
+                        if (playing) {
+                            String.format(Locale.CHINA, "%d:%02d", (ms * progress / 1000).toInt() / 60, (ms * progress / 1000).toInt() % 60)
+                        } else {
+                            formatSeconds(ms)
+                        }
+                }
+            }
+        }
+
+    private fun formatSeconds(ms: Long): String {
+        if (ms <= 0) return ""
+        val total = (ms / 1000).coerceAtLeast(1).toInt()
+        return if (total >= 60) "${total / 60}:${String.format(Locale.CHINA, "%02d", total % 60)}" else "${total}s"
+    }
+
     private fun historyPage(): View {
+        playControls.clear()
         val col = Jv.column(this)
         col.addView(Jv.pageTitle(this, "历史记录"))
 
-        val info = Jv.card(this)
-        info.addView(Jv.row(this, "保留历史", "永久（本地，不上云）"))
-        info.addView(Jv.divider(this))
-        info.addView(
-            Jv.row(
-                this,
-                "您的数据保持私密",
-                "听写记录只存在这台设备上，不会上传。",
-            ),
-        )
-        col.addView(info)
+        val all = VoiceHistory.list(this)
+        val pending = all.count { it.canRetry }
+        val recorded = all.count { it.hasAudio }
 
-        val entries = VoiceHistory.list(this)
-        if (entries.isEmpty()) {
+        // 顶部只留一句最有用的：有多少条还没转出文字。
+        if (pending > 0) {
+            val notice = Jv.card(this, Jv.CARD, 16)
+            notice.addView(
+                Jv.text(this, "$pending 段录音还没转成文字", 16f, Jv.TEXT, bold = true).apply {
+                    setPadding(Jv.dp(this@JackVoiceActivity, 18), Jv.dp(this@JackVoiceActivity, 16), Jv.dp(this@JackVoiceActivity, 18), 0)
+                },
+            )
+            notice.addView(
+                Jv.text(this, "声音都在这台手机里，点「重新转写」就能再识别一次。", 13f, Jv.TEXT2).apply {
+                    setPadding(Jv.dp(this@JackVoiceActivity, 18), Jv.dp(this@JackVoiceActivity, 6), Jv.dp(this@JackVoiceActivity, 18), Jv.dp(this@JackVoiceActivity, 16))
+                },
+            )
+            col.addView(notice)
+        }
+
+        if (all.isEmpty()) {
             col.addView(Jv.sectionLabel(this, "还没有记录"))
             val empty = Jv.card(this)
             empty.addView(
-                Jv.text(this, "说一句试试——文字上屏后就会出现在这里。", 14f, Jv.TEXT2).apply {
+                Jv.text(this, "说一句试试——文字上屏后就会出现在这里，原始录音也一起留着。", 14f, Jv.TEXT2).apply {
                     setPadding(Jv.dp(this@JackVoiceActivity, 18), Jv.dp(this@JackVoiceActivity, 18), Jv.dp(this@JackVoiceActivity, 18), Jv.dp(this@JackVoiceActivity, 18))
                 },
             )
@@ -402,32 +466,154 @@ class JackVoiceActivity :
         val dayFmt = SimpleDateFormat("yyyy 年 M 月 d 日", Locale.CHINA)
         val timeFmt = SimpleDateFormat("HH:mm", Locale.CHINA)
         var lastDay = ""
-        entries.forEach { e ->
+        all.forEach { e ->
             val day = dayFmt.format(Date(e.atMillis))
             if (day != lastDay) {
                 lastDay = day
                 col.addView(Jv.sectionLabel(this, day))
-            } else {
-                col.addView(Jv.sectionLabel(this, ""))
             }
-            val card = Jv.card(this, Jv.CARD, 16)
-            card.addView(
-                Jv.text(this, timeFmt.format(Date(e.atMillis)), 13f, Jv.TEXT2).apply {
-                    setPadding(Jv.dp(this@JackVoiceActivity, 16), Jv.dp(this@JackVoiceActivity, 14), Jv.dp(this@JackVoiceActivity, 16), 0)
-                },
+            col.addView(entryCard(e, timeFmt))
+        }
+
+        col.addView(
+            Jv.text(this, "全部记录都存在本机，共 ${all.size} 条，其中 $recorded 条带录音，占用 ${formatMb(VoiceAudio.totalBytes(this))}。", 12f, Jv.TEXT2).apply {
+                setPadding(Jv.dp(this@JackVoiceActivity, 20), Jv.dp(this@JackVoiceActivity, 14), Jv.dp(this@JackVoiceActivity, 20), 0)
+            },
+        )
+        return Jv.page(col)
+    }
+
+    /**
+     * 一条历史记录。
+     *
+     * 三样东西必须一眼看见：**这段说的什么字**、**能不能听**、**为什么没有字**。
+     * 失败条目不是「空卡片」——它是一段还在的声音，配上失败原因和重试。
+     */
+    private fun entryCard(
+        e: VoiceHistory.Entry,
+        timeFmt: SimpleDateFormat,
+    ): View {
+        val card = Jv.card(this, Jv.CARD, 16)
+        val pad16 = Jv.dp(this@JackVoiceActivity, 16)
+
+        val header =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(pad16, Jv.dp(this@JackVoiceActivity, 14), pad16, 0)
+            }
+        header.addView(
+            Jv.text(this, timeFmt.format(Date(e.atMillis)), 13f, Jv.TEXT2),
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
+        )
+        // 时长 + 播放键：有录音才给听。
+        if (e.hasAudio) {
+            val durationText =
+                Jv.text(this, formatSeconds(e.durationMs), 13f, Jv.TEXT2).apply {
+                    setPadding(0, 0, Jv.dp(this@JackVoiceActivity, 10), 0)
+                }
+            header.addView(durationText)
+
+            val icon =
+                android.widget.ImageView(this).apply {
+                    setImageResource(R.drawable.ic_baseline_play_arrow_24)
+                    setColorFilter(Jv.TEXT2)
+                    scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+                    val p = Jv.dp(this@JackVoiceActivity, 8)
+                    setPadding(p, p, p, p)
+                    isClickable = true
+                    contentDescription = "试听这段录音"
+                    setOnClickListener { VoiceAudioPlayer.toggle(this@JackVoiceActivity, e) }
+                }
+            val progress =
+                android.widget.ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+                    max = 1000
+                    progress = 0
+                    visibility = View.GONE
+                    progressTintList = android.content.res.ColorStateList.valueOf(Jv.ACCENT)
+                }
+            val playBox =
+                FrameLayout(this).apply {
+                    background = Jv.round(Jv.CARD_STRONG, Jv.dp(this@JackVoiceActivity, 17))
+                    val size = Jv.dp(this@JackVoiceActivity, 34)
+                    addView(icon, FrameLayout.LayoutParams(size, size))
+                    addView(
+                        progress,
+                        FrameLayout.LayoutParams(size, Jv.dp(this@JackVoiceActivity, 3), Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
+                            bottomMargin = Jv.dp(this@JackVoiceActivity, 4)
+                        },
+                    )
+                    setOnClickListener { VoiceAudioPlayer.toggle(this@JackVoiceActivity, e) }
+                }
+            header.addView(
+                playBox,
+                LinearLayout.LayoutParams(Jv.dp(this@JackVoiceActivity, 34), Jv.dp(this@JackVoiceActivity, 34)),
             )
+            playControls += PlayControl(e.id, icon, progress, durationText)
+        } else {
+            val duration = formatSeconds(e.durationMs)
+            if (duration.isNotEmpty()) header.addView(Jv.text(this, duration, 13f, Jv.TEXT2))
+        }
+        card.addView(header)
+
+        if (e.hasText) {
             card.addView(
                 Jv.text(this, e.text, 16f, Jv.TEXT).apply {
-                    setPadding(Jv.dp(this@JackVoiceActivity, 16), Jv.dp(this@JackVoiceActivity, 8), Jv.dp(this@JackVoiceActivity, 16), 0)
+                    setPadding(pad16, Jv.dp(this@JackVoiceActivity, 8), pad16, 0)
                     setLineSpacing(Jv.dp(this@JackVoiceActivity, 5).toFloat(), 1f)
                 },
             )
-            val actions =
-                LinearLayout(this).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    gravity = Gravity.END or Gravity.CENTER_VERTICAL
-                    setPadding(Jv.dp(this@JackVoiceActivity, 16), Jv.dp(this@JackVoiceActivity, 10), Jv.dp(this@JackVoiceActivity, 16), Jv.dp(this@JackVoiceActivity, 14))
+        } else {
+            // 失败条目：标题说清「为什么没有字」，再用一行小字说明声音还在。
+            val statusLine =
+                when (e.status) {
+                    VoiceHistory.Status.Transcribing -> "正在识别…"
+                    VoiceHistory.Status.Empty -> "这段里没听到人声"
+                    VoiceHistory.Status.NoNetwork -> "当时网络没连上，没能转成文字"
+                    VoiceHistory.Status.Recording -> "上次听写被中断了"
+                    else -> e.error.ifBlank { "没有转出文字" }
                 }
+            card.addView(
+                Jv.text(this, statusLine, 15f, Jv.TEXT).apply {
+                    setPadding(pad16, Jv.dp(this@JackVoiceActivity, 8), pad16, 0)
+                },
+            )
+            if (e.hasAudio) {
+                // 「没听到人声」就别再怂恿用户重试了——声音留着是为了让他自己听，
+                // 不是让他反复点同一个空结果。
+                val hint =
+                    if (e.canRetry) {
+                        "声音在这里，可以再识别一次"
+                    } else {
+                        "声音还留着，可以点右上角听"
+                    }
+                card.addView(
+                    Jv.text(this, hint, 13f, Jv.ACCENT).apply {
+                        setPadding(pad16, Jv.dp(this@JackVoiceActivity, 6), pad16, 0)
+                    },
+                )
+            }
+        }
+
+        val actions =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.END or Gravity.CENTER_VERTICAL
+                setPadding(pad16, Jv.dp(this@JackVoiceActivity, 10), pad16, Jv.dp(this@JackVoiceActivity, 14))
+            }
+        if (retryingEntryId == e.id) {
+            // 正在跑的那条，把「正在处理」写在它自己身上——不写在别处让人猜。
+            actions.addView(
+                Jv.text(this, "正在重新识别…", 14f, Jv.ACCENT).apply {
+                    setPadding(Jv.dp(this@JackVoiceActivity, 10), Jv.dp(this@JackVoiceActivity, 6), 0, Jv.dp(this@JackVoiceActivity, 6))
+                },
+            )
+        } else if (e.canRetry) {
+            actions.addView(
+                iconText("重新转写", Jv.ACCENT) { retryEntry(e) },
+            )
+        }
+        if (e.hasText) {
             actions.addView(
                 iconText("复制") {
                     val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -435,16 +621,66 @@ class JackVoiceActivity :
                     toast("已复制")
                 },
             )
-            actions.addView(
-                iconText("删除") {
-                    VoiceHistory.delete(this, e)
-                    select(Tab.History)
+        }
+        actions.addView(
+            iconText("删除") {
+                if (VoiceAudioPlayer.playingEntryId == e.id) VoiceAudioPlayer.stop()
+                VoiceHistory.delete(this, e)
+                select(Tab.History)
+            },
+        )
+        card.addView(actions)
+        return card
+    }
+
+    /** 用本地录音补出这一条的文字。识别在主界面里也能跑，不必回键盘。 */
+    private fun retryEntry(entry: VoiceHistory.Entry) {
+        // 先看有没有在跑别的：直接告诉用户是哪一条，别让他猜。
+        val busy = VoiceTranscriber.busyEntryId
+        if (busy != null && busy != entry.id) {
+            val other = VoiceHistory.find(this, busy)
+            val at = other?.let { SimpleDateFormat("HH:mm", Locale.CHINA).format(Date(it.atMillis)) }
+            toast(if (at != null) "$at 那条正在重新识别，完成后再点这条" else "另一条正在重新识别，请稍等")
+            return
+        }
+        retryingEntryId = entry.id
+        select(Tab.History)
+        val started =
+            VoiceTranscriber.transcribe(
+                this,
+                entry.id,
+                object : VoiceTranscriber.Callback {
+                    override fun onDone(
+                        entryId: String,
+                        text: String,
+                    ) {
+                        retryingEntryId = null
+                        VoiceHistory.markCompleted(this@JackVoiceActivity, entryId, text, 0L)
+                        toast("已补上：$text")
+                        select(Tab.History)
+                    }
+
+                    override fun onFailed(
+                        entryId: String,
+                        message: String,
+                        retryable: Boolean,
+                    ) {
+                        retryingEntryId = null
+                        VoiceHistory.markFailed(
+                            this@JackVoiceActivity,
+                            entryId,
+                            if (retryable) VoiceHistory.Status.NoNetwork else VoiceHistory.Status.Empty,
+                            message,
+                        )
+                        toast("重新识别失败：$message")
+                        select(Tab.History)
+                    }
                 },
             )
-            card.addView(actions)
-            col.addView(card)
+        if (!started) {
+            retryingEntryId = null
+            select(Tab.History)
         }
-        return Jv.page(col)
     }
 
     private fun iconText(
@@ -1121,11 +1357,16 @@ class JackVoiceActivity :
         about.addView(Jv.row(this, "版本", BuildConfig.VERSION_NAME))
         about.addView(Jv.divider(this))
         about.addView(
-            Jv.row(this, "听写记录", "共 ${VoiceHistory.list(this).size} 条，清空", chevron = true) {
+            Jv.row(
+                this,
+                "听写记录",
+                "共 ${VoiceHistory.list(this).size} 条（录音 ${formatMb(VoiceAudio.totalBytes(this))}），清空",
+                chevron = true,
+            ) {
                 AlertDialog
                     .Builder(this)
                     .setTitle("清空听写记录？")
-                    .setMessage("只会删掉这台设备上的记录，不可恢复。")
+                    .setMessage("记录和本机保存的原始录音会一起删掉，不可恢复。")
                     .setPositiveButton("清空") { _, _ ->
                         VoiceHistory.clear(this)
                         select(Tab.Settings)
@@ -1160,6 +1401,12 @@ class JackVoiceActivity :
                 AppPrefs.defaultInstance().advanced.uiMode.setValue(modes[which])
             }.setNegativeButton(android.R.string.cancel, null)
             .show()
+    }
+
+    private fun formatMb(bytes: Long): String = when {
+        bytes >= 1024L * 1024 * 1024 -> String.format(Locale.CHINA, "%.1f GB", bytes / 1024.0 / 1024 / 1024)
+        bytes >= 1024L * 1024 -> String.format(Locale.CHINA, "%.1f MB", bytes / 1024.0 / 1024)
+        else -> String.format(Locale.CHINA, "%.0f KB", bytes / 1024.0)
     }
 
     private fun maskKey(key: String): String = if (key.length <= 8) "已填写" else key.take(4) + "…" + key.takeLast(4)

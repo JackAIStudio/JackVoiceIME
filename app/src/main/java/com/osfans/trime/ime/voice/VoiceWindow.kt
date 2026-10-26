@@ -73,6 +73,8 @@ class VoiceWindow(di: DI) :
         // 顶栏最右一格「收起键盘」。语音面板和打字键盘各有一份顶栏，
         // 两边的回调都要接上——只在 KeyboardWindow 里接的话，语音面板上这颗键点了没反应。
         view.toolbar.onHideTap = { service.requestHideSelf(0) }
+        // 上一轮识别失败时，这段录音还在本地：点一下就地再识别，不用去历史页翻。
+        view.onRetryTap = { onRetryTap() }
         panel = view
         return view
     }
@@ -89,6 +91,7 @@ class VoiceWindow(di: DI) :
         GlossarySyncManager.onVoicePanelShown(context)
         // 用户明确回到面板：上一轮残留的识别结果该落就落，别一直排着。
         VoiceSession.flushPending(force = true)
+        syncRetryButton()
     }
 
     override fun onDetached() {
@@ -108,10 +111,30 @@ class VoiceWindow(di: DI) :
     override fun onVoiceStateChanged(state: VoiceState) {
         val view = panel ?: return
         view.setState(state)
+        syncRetryButton()
         // 录音中切走再切回来：把最后一段流式结果补上，预览不会变空。
         if (state == VoiceState.Recording && VoiceSession.lastPartial.isNotEmpty()) {
             view.setPreview(VoiceSession.lastPartial)
         }
+    }
+
+    /** 有可重试的录音、且面板回到空闲时，把「重新识别这段录音」亮出来。 */
+    private fun syncRetryButton() {
+        panel?.setRetryAvailable(VoiceSession.retryEntryId != null)
+    }
+
+    private fun onRetryTap() {
+        if (!VoiceSession.retryLast()) return
+        panel?.showMessage("正在根据本地录音重新识别…")
+        noticeJob?.cancel()
+        noticeJob =
+            service.lifecycleScope.launch {
+                delay(2600)
+                if (VoiceSession.state == VoiceState.Idle) {
+                    panel?.setState(VoiceState.Idle)
+                    syncRetryButton()
+                }
+            }
     }
 
     override fun onVoicePartial(text: String) {
@@ -125,11 +148,15 @@ class VoiceWindow(di: DI) :
     override fun onVoiceNotice(text: String) {
         val view = panel ?: return
         view.showMessage(text)
+        syncRetryButton()
         noticeJob?.cancel()
         noticeJob =
             service.lifecycleScope.launch {
                 delay(2600)
-                if (VoiceSession.state == VoiceState.Idle) view.setState(VoiceState.Idle)
+                if (VoiceSession.state == VoiceState.Idle) {
+                    view.setState(VoiceState.Idle)
+                    syncRetryButton()
+                }
             }
     }
 
@@ -138,7 +165,9 @@ class VoiceWindow(di: DI) :
     private fun onOrbTap() {
         when (VoiceSession.state) {
             VoiceState.Idle -> VoiceSession.start()
+
             VoiceState.Recording -> VoiceSession.stop()
+
             // 等终稿时点一下 = 算了，别等了。
             //
             // 这里原来是 Unit：只要收尾卡住（服务端不回终稿、连接异常、兜底定时器

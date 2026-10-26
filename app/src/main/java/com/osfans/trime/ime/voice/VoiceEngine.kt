@@ -22,6 +22,12 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * 输入法与这个服务同进程，所以直接用单例回传，不走 Binder。
  * 所有回调都切到主线程——调用方拿到就能直接改 UI / 调输入连接。
+ *
+ * ## 同一块 PCM 走两条路
+ *
+ * 每一块音频既喂给流式识别，也**同时写进本地 WAV**（[VoiceAudio]）。
+ * 网络断了、终稿没等到、进程被回收，声音都还在，用户能重来。
+ * 写盘失败不会拖累识别——最多这一轮没存上，日志里有记录。
  */
 object VoiceEngine {
     interface Listener {
@@ -33,6 +39,19 @@ object VoiceEngine {
 
         /** 实时音量（0..1）。静音必须是 0，波形靠它驱动，没声音就不该动。 */
         fun onLevel(level: Float)
+
+        /**
+         * 这一轮没转出文字，但**录音已经留在本地**了。
+         *
+         * 与 [onError] 分开：超时兜底那句一个错都没有，只是没拿到结果，
+         * 走 onError 会让界面报一个并不存在的「失败原因」，而且拿不到重试入口。
+         *
+         * @param entryId 历史里那条记录，界面可以直接拿它去重识别
+         */
+        fun onRetryable(
+            entryId: String,
+            message: String,
+        ) {}
     }
 
     private val main = Handler(Looper.getMainLooper())
@@ -43,6 +62,9 @@ object VoiceEngine {
     private var recorder: VoiceRecorder? = null
     private var asr: VolcAsrClient? = null
 
+    /** 本轮音频的落盘器。null 表示这一轮存不下来（目录不可写等），识别照常。 */
+    private var audio: VoiceAudio.Writer? = null
+
     private val result = StringBuilder()
     private val stopped = AtomicBoolean(true)
 
@@ -51,6 +73,12 @@ object VoiceEngine {
 
     /** 点停止的时刻，用来区分「等到了终稿」和「超时拿一遍结果兜底」。 */
     private var stopAt = 0L
+
+    /** 本轮的听写历史条目。录音一开始就建，失败也留着。 */
+    private var entryId: String = ""
+
+    /** 停止录音时收尾出来的 WAV，等终稿到了再挂到记录上。 */
+    private var stoppedArtifact: VoiceAudio.Artifact? = null
 
     @Volatile
     var isRecording = false
@@ -64,6 +92,17 @@ object VoiceEngine {
     fun setListener(value: Listener?) {
         listener = value
     }
+
+    /** 当前这轮记录编号（面板重试按钮要知道重试哪一条）。 */
+    val currentEntryId: String get() = entryId
+
+    /** 刚刚失败、音频还在的那条记录。界面据此亮出「重试」。 */
+    @Volatile
+    var failedEntryId: String = ""
+        private set
+
+    /** 这一轮有没有存到音频。事件收尾后可能已经没了，只适合在录音/处理中问。 */
+    val hasAudio: Boolean get() = audio != null || entryId.isNotEmpty()
 
     /**
      * 调用前必须已经 `startForeground(...)`，否则麦克风仍会被系统拒绝。
@@ -81,6 +120,18 @@ object VoiceEngine {
         result.setLength(0)
         stopped.set(false)
         isWaitingFinal = false
+        stoppedArtifact = null
+        failedEntryId = ""
+
+        // 先落一条空记录：这样即使下面建连就崩了，历史里也有这条「说过的话」。
+        entryId =
+            runCatching { VoiceHistory.begin(ctx) }
+                .onFailure { Timber.w(it, "建听写记录失败") }
+                .getOrDefault("")
+        audio =
+            entryId
+                .takeIf { it.isNotEmpty() }
+                ?.let { VoiceAudio.create(ctx, it) }
 
         val client =
             VolcAsrClient(
@@ -119,13 +170,18 @@ object VoiceEngine {
 
         val rec =
             VoiceRecorder(
-                onChunk = { client.feed(it) },
+                onChunk = {
+                    audio?.write(it)
+                    client.feed(it)
+                },
                 onError = { finishWithError(it) },
                 onLevel = { level -> post { listener?.onLevel(level) } },
             )
         if (!rec.start()) {
             client.cancel()
             asr = null
+            // 麦克风没起来，这条等于什么都没录到：别在历史里留空壳。
+            discardCurrentEntry(ctx)
             post { listener?.onError("麦克风启动失败") }
             return false
         }
@@ -154,22 +210,37 @@ object VoiceEngine {
         // 收尾动作各自隔离：任何一个失败都不该连累其余步骤和上面的定时器。
         runCatching { recorder?.stop() }
         recorder = null
+        // 先让音频落定，再等服务端终稿。这里就是这一轮 WAV 的收尾点：
+        // 之后不论是终稿、超时兜底还是出错，用的都是这一份 [stoppedArtifact]。
+        stoppedArtifact =
+            runCatching { audio?.finish() }
+                .onFailure { Timber.w(it, "停止录音时写盘失败") }
+                .getOrNull()
+        audio = null
+        stoppedArtifact?.let { artifact ->
+            runCatching { VoiceHistory.attachAudio(appContext, entryId, artifact) }
+            Log.i(TAG, "录音已存：${artifact.fileName}（${artifact.durationMs}ms）")
+        }
         runCatching { asr?.stop() }
         // 停录这一刻波形就该落地，别等终稿或超时。
         post { listener?.onLevel(0f) }
     }
 
-    /** 直接丢弃，不上屏。 */
+    /** 直接丢弃，不上屏。**这是唯一会连音频一起删掉的路径**：用户明确说不要了。 */
     fun cancel() {
         isRecording = false
         isWaitingFinal = false
         stopped.set(true)
         recorder?.stop()
         recorder = null
+        runCatching { audio?.abort() }
+        audio = null
+        stoppedArtifact = null
         asr?.cancel()
         asr = null
         result.setLength(0)
         main.removeCallbacksAndMessages(null)
+        discardCurrentEntry(appContext)
         post { listener?.onLevel(0f) }
     }
 
@@ -191,14 +262,15 @@ object VoiceEngine {
         asr?.cancel()
         asr = null
         result.setLength(0)
+        val artifact = closedArtifact()
         val text = raw.trim()
         val mode = VoicePrefs.punctuationMode(appContext)
         val processed = runCatching { PostProcessor.process(text, appContext) }.getOrDefault(text)
         val finalText = runCatching { PunctuationProcessor.apply(processed, mode) }.getOrDefault(processed)
-        val duration = if (startedAt > 0) System.currentTimeMillis() - startedAt else 0L
-        startedAt = 0L
         val waited = elapsedSinceStop()
         stopAt = 0L
+        val duration = if (startedAt > 0) System.currentTimeMillis() - startedAt else artifact?.durationMs ?: 0L
+        startedAt = 0L
         if (fromTimeout) {
             Log.w(TAG, "没等到终稿，用一遍流式结果兜底：${text.length} 字，停止后 ${waited}ms")
         } else {
@@ -207,11 +279,16 @@ object VoiceEngine {
         if (finalText != text) {
             Log.i(TAG, "标点处理（${mode.label}）：${text.length} → ${finalText.length} 字")
         }
-        if (finalText.isNotEmpty()) {
-            runCatching { VoiceHistory.append(appContext, finalText, duration) }
-        }
+        archive(artifact, finalText, duration, fromTimeout)
         post { listener?.onLevel(0f) }
-        post { listener?.onFinal(finalText) }
+        if (finalText.isEmpty() && failedEntryId.isNotEmpty()) {
+            // 没转出文字但音频在：别当成功收场，把重试入口递出去。
+            val id = failedEntryId
+            val message = if (fromTimeout) "没等到识别结果" else "没有识别出文字"
+            post { listener?.onRetryable(id, message) }
+        } else {
+            post { listener?.onFinal(finalText) }
+        }
     }
 
     private fun finishWithError(message: String) {
@@ -226,8 +303,104 @@ object VoiceEngine {
         isWaitingFinal = false
         Log.e(TAG, "识别失败：$message（停止后 ${elapsedSinceStop()}ms）")
         stopAt = 0L
+        // 失败也要留住：音频收尾、记录标成失败，用户能点重新识别。
+        val artifact = closedArtifact()
+        archive(artifact, "", 0L, fromTimeout = false, error = message)
         post { listener?.onLevel(0f) }
         post { listener?.onError(message) }
+    }
+
+    /**
+     * 把这一轮落进历史。
+     *
+     * 成功：有文字，记 Completed。
+     * 失败：哪怕一个字都没有，只要录到了声音就记 Failed —— 万物留痕。
+     */
+    private fun archive(
+        artifact: VoiceAudio.Artifact?,
+        finalText: String,
+        durationMs: Long,
+        fromTimeout: Boolean,
+        error: String? = null,
+    ) {
+        val id = entryId
+        entryId = ""
+        if (id.isEmpty()) return
+        runCatching {
+            when {
+                finalText.isNotEmpty() -> {
+                    if (artifact != null) VoiceHistory.attachAudio(appContext, id, artifact)
+                    VoiceHistory.markCompleted(appContext, id, finalText, durationMs)
+                }
+
+                artifact != null -> {
+                    // 有声音、没文字：留着，标失败。超时兜底也只有音频，
+                    // 说明服务端没给结果，重识别比丢掉强。
+                    VoiceHistory.attachAudio(appContext, id, artifact)
+                    val message = error ?: if (fromTimeout) "没等到识别结果" else "没有识别出文字"
+                    val status =
+                        if (error != null && isNetworkError(error)) {
+                            VoiceHistory.Status.NoNetwork
+                        } else {
+                            VoiceHistory.Status.Failed
+                        }
+                    VoiceHistory.markFailed(appContext, id, status, message)
+                    // 递一个「重试」入口给界面：这段录音还在，随时能再识别一次。
+                    failedEntryId = id
+                }
+
+                else -> {
+                    // 连一个字节的音频都没存下，也没识别出东西：这条没有留存价值。
+                    VoiceHistory.discard(appContext, id)
+                }
+            }
+        }.onFailure { Timber.w(it, "写入听写记录失败") }
+    }
+
+    /** 丢掉的条目：取消录音、麦克风起不来。 */
+    private fun discardCurrentEntry(ctx: Context) {
+        val id = entryId
+        entryId = ""
+        if (id.isEmpty()) return
+        runCatching { VoiceHistory.discard(ctx, id) }
+    }
+
+    /**
+     * 网络类错误 vs 鉴权/配置错误。决定重试按钮的分量：
+     * 断网那句值得再试，Key 填错了再试一百次也没用。
+     */
+    private fun isNetworkError(message: String): Boolean {
+        val m = message.lowercase()
+        if (m.contains("401") || m.contains("unauthorized") || m.contains("鉴权")) return false
+        return m.contains("timeout") ||
+            m.contains("timed out") ||
+            m.contains("connect") ||
+            m.contains("network") ||
+            m.contains("unable to resolve host") ||
+            m.contains("socket") ||
+            m.contains("closed") ||
+            m.contains("broken pipe") ||
+            m.contains("no route") ||
+            m.contains("dns")
+    }
+
+    /**
+     * 取这一轮的音频产物。
+     *
+     * 正常停止时 [stopRecording] 已经收尾并放进 [stoppedArtifact]；
+     * 出错时 [finishWithError] 可能先到，那就地收尾。两条路径都只收一次。
+     */
+    private fun closedArtifact(): VoiceAudio.Artifact? {
+        val pending = audio
+        audio = null
+        if (pending != null) {
+            stoppedArtifact = runCatching { pending.finish() }
+                .onFailure { Timber.w(it, "录音收尾失败") }
+                .getOrNull()
+        }
+        val artifact = stoppedArtifact
+        stoppedArtifact = null
+        return artifact
     }
 
     private fun post(block: () -> Unit) {

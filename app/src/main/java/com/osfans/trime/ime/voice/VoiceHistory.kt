@@ -11,19 +11,86 @@ import org.json.JSONObject
 import timber.log.Timber
 import java.io.File
 import java.util.Calendar
+import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * 本地听写历史。存在应用私有目录里的一个 JSON 文件，不上云。
  *
- * 对齐 Typeless 的「历史记录」页：按时间倒序、可复制、可删除。
+ * ## 万物留痕
+ *
+ * 一条记录**先记下「说了这段声音」，再谈识别**。所以录音一开始就 [begin] 建条目，
+ * 音频收尾后挂上 [Entry.audio]，识别失败只是把 [Entry.status] 标成 Failed，
+ * 记录和 WAV 都还在。用户随时能在历史页点「重新转写」把它补出来。
+ *
+ * 只有三种情况会真的丢掉一段声音：
+ *  1. 用户点了「取消」——那是明确不要了；
+ *  2. 一个字节的音频都没录到（麦克风起不来）；
+ *  3. 用户手动删掉这条记录 / 清空历史。
+ *
+ * ## 状态
+ *
+ * ```
+ * Recording ──收尾──> Transcribing ──终稿──> Completed
+ *                              └──失败/超时──> Failed ──重试──> Transcribing
+ *                              └──没听到声音──> Empty
+ * ```
  */
 object VoiceHistory {
+    enum class Status(
+        val id: String,
+    ) {
+        /** 正在录。正常结束或被系统打断时，这条会被接上后续状态。 */
+        Recording("recording"),
+
+        /** 音频已落盘，正在等识别结果。 */
+        Transcribing("transcribing"),
+
+        Completed("completed"),
+
+        /** 识别失败，但音频还在。历史页给「重新转写」。 */
+        Failed("failed"),
+
+        /** 连接建不起来，一遍结果都没有。音频还在，值得重试。 */
+        NoNetwork("no_network"),
+
+        /** 服务端说这段里没有人说话。 */
+        Empty("empty"),
+    }
+
     data class Entry(
+        val id: String,
         val text: String,
         val atMillis: Long,
         val durationMs: Long,
-    )
+        val fileName: String? = null,
+        val status: Status = Status.Completed,
+        val error: String = "",
+        /** 用户手动重试过几次。只做展示与退避，不自动重试。 */
+        val retryCount: Int = 0,
+    ) {
+        /** 有一条能拿来重新识别的本地录音。 */
+        val hasAudio: Boolean get() = !fileName.isNullOrEmpty()
+
+        /**
+         * 可以点「重新转写」：有音频，且不是正在处理中。
+         *
+         * [Status.Empty] 排除在外——服务端已经明确说这段里没人说话，
+         * 再点几次也一样，按钮一直亮着只会骗用户点。
+         */
+        val canRetry: Boolean
+            get() = hasAudio &&
+                status != Status.Transcribing &&
+                status != Status.Recording &&
+                status != Status.Completed &&
+                status != Status.Empty
+
+        /** 上屏过的正文。失败条目没有文字，不当成一次有效听写。 */
+        val hasText: Boolean get() = text.isNotBlank()
+
+        val failed: Boolean
+            get() = status == Status.Failed || status == Status.NoNetwork
+    }
 
     private const val FILE_NAME = "voice_history.json"
     private const val MAX_ENTRIES = 500
@@ -33,6 +100,8 @@ object VoiceHistory {
     @Volatile
     private var loaded = false
 
+    // ── 读 ──────────────────────────────────────────────────────────────
+
     @Synchronized
     fun list(ctx: Context): List<Entry> {
         ensureLoaded(ctx)
@@ -40,15 +109,122 @@ object VoiceHistory {
     }
 
     @Synchronized
-    fun append(
+    fun find(
         ctx: Context,
+        id: String,
+    ): Entry? {
+        ensureLoaded(ctx)
+        return cache.firstOrNull { it.id == id }
+    }
+
+    /** 待补转写的条目（有音频、失败了）。不自动跑，只给界面显示数量。 */
+    @Synchronized
+    fun retryable(ctx: Context): List<Entry> {
+        ensureLoaded(ctx)
+        return cache.filter { it.canRetry }
+    }
+
+    @Synchronized
+    fun size(ctx: Context): Int {
+        ensureLoaded(ctx)
+        return cache.size
+    }
+
+    // ── 写 ──────────────────────────────────────────────────────────────
+
+    /** 录音一开始就建条目，**先落一条记录再谈识别**。 */
+    @Synchronized
+    fun begin(
+        ctx: Context,
+        id: String = UUID.randomUUID().toString(),
+        atMillis: Long = System.currentTimeMillis(),
+    ): String {
+        ensureLoaded(ctx)
+        cache.add(
+            0,
+            Entry(
+                id = id,
+                text = "",
+                atMillis = atMillis,
+                durationMs = 0L,
+                status = Status.Recording,
+            ),
+        )
+        while (cache.size > MAX_ENTRIES) {
+            val dropped = cache.removeAt(cache.size - 1)
+            dropped.fileName?.let { VoiceAudio.delete(ctx, it) }
+        }
+        persist(ctx)
+        return id
+    }
+
+    /** 音频收尾：挂上文件名和时长，进入「等识别」。 */
+    @Synchronized
+    fun attachAudio(
+        ctx: Context,
+        id: String,
+        artifact: VoiceAudio.Artifact,
+    ) {
+        update(ctx, id) {
+            it.copy(
+                fileName = artifact.fileName,
+                durationMs = artifact.durationMs,
+                status = Status.Transcribing,
+            )
+        }
+    }
+
+    @Synchronized
+    fun markTranscribing(
+        ctx: Context,
+        id: String,
+    ) {
+        update(ctx, id) { it.copy(status = Status.Transcribing, error = "") }
+    }
+
+    @Synchronized
+    fun markCompleted(
+        ctx: Context,
+        id: String,
         text: String,
         durationMs: Long,
     ) {
-        if (text.isBlank()) return
+        update(ctx, id) {
+            it.copy(
+                text = text,
+                durationMs = if (durationMs > 0) durationMs else it.durationMs,
+                status = Status.Completed,
+                error = "",
+            )
+        }
+    }
+
+    @Synchronized
+    fun markFailed(
+        ctx: Context,
+        id: String,
+        status: Status,
+        error: String,
+    ) {
+        update(ctx, id) {
+            it.copy(
+                status = status,
+                error = error.take(200),
+                retryCount = it.retryCount + if (status == Status.Failed || status == Status.NoNetwork) 1 else 0,
+            )
+        }
+    }
+
+    /** 点「取消」：这条确实不要了，连音频一起删。 */
+    @Synchronized
+    fun discard(
+        ctx: Context,
+        id: String,
+    ) {
         ensureLoaded(ctx)
-        cache.add(0, Entry(text, System.currentTimeMillis(), durationMs))
-        while (cache.size > MAX_ENTRIES) cache.removeAt(cache.size - 1)
+        val entry = cache.firstOrNull { it.id == id } ?: return
+        entry.fileName?.let { VoiceAudio.delete(ctx, it) }
+        cache.remove(entry)
         persist(ctx)
     }
 
@@ -58,6 +234,7 @@ object VoiceHistory {
         entry: Entry,
     ) {
         ensureLoaded(ctx)
+        entry.fileName?.let { VoiceAudio.delete(ctx, it) }
         cache.remove(entry)
         persist(ctx)
     }
@@ -65,9 +242,59 @@ object VoiceHistory {
     @Synchronized
     fun clear(ctx: Context) {
         ensureLoaded(ctx)
+        cache.forEach { e -> e.fileName?.let { VoiceAudio.delete(ctx, it) } }
         cache.clear()
         persist(ctx)
     }
+
+    /**
+     * 启动时接手上次没走完的录音（`.part` 已由 [VoiceAudio.recoverInterrupted] 修好）。
+     *
+     * 库里已经有同名文件的条目就不重复建；剩下那些说明当时连记录都还没来得及写，
+     * 补一条 [Status.Failed] 记录，让它出现在历史页里。
+     */
+    @Synchronized
+    fun adoptOrphans(
+        ctx: Context,
+        recovered: List<String>,
+    ) {
+        if (recovered.isEmpty()) return
+        ensureLoaded(ctx)
+        val known = cache.mapNotNull { it.fileName }.toSet()
+        var added = false
+        for (name in recovered) {
+            if (name in known) continue
+            val artifact = VoiceAudio.artifactFor(ctx, name) ?: continue
+            cache.add(
+                0,
+                Entry(
+                    id = UUID.randomUUID().toString(),
+                    text = "",
+                    atMillis = System.currentTimeMillis(),
+                    durationMs = artifact.durationMs,
+                    fileName = name,
+                    status = Status.Failed,
+                    error = "上次听写被中断",
+                ),
+            )
+            added = true
+        }
+        if (added) persist(ctx)
+    }
+
+    private fun update(
+        ctx: Context,
+        id: String,
+        block: (Entry) -> Entry,
+    ) {
+        ensureLoaded(ctx)
+        val index = cache.indexOfFirst { it.id == id }
+        if (index < 0) return
+        cache[index] = block(cache[index])
+        persist(ctx)
+    }
+
+    // ── 落盘 ────────────────────────────────────────────────────────────
 
     @Synchronized
     private fun ensureLoaded(ctx: Context) {
@@ -81,9 +308,15 @@ object VoiceHistory {
                 val o = arr.getJSONObject(i)
                 cache.add(
                     Entry(
-                        o.optString("text"),
-                        o.optLong("at"),
-                        o.optLong("dur"),
+                        id = o.optString("id").ifBlank { UUID.randomUUID().toString() },
+                        text = o.optString("text"),
+                        atMillis = o.optLong("at"),
+                        durationMs = o.optLong("dur"),
+                        fileName = o.optString("audio").takeIf { it.isNotBlank() },
+                        // 老记录没有这两个字段：那时只有成功上屏的才会进历史。
+                        status = Status.entries.firstOrNull { it.id == o.optString("status") } ?: Status.Completed,
+                        error = o.optString("error"),
+                        retryCount = o.optInt("retry"),
                     ),
                 )
             }
@@ -96,12 +329,24 @@ object VoiceHistory {
             cache.forEach {
                 arr.put(
                     JSONObject()
+                        .put("id", it.id)
                         .put("text", it.text)
                         .put("at", it.atMillis)
-                        .put("dur", it.durationMs),
+                        .put("dur", it.durationMs)
+                        .put("audio", it.fileName.orEmpty())
+                        .put("status", it.status.id)
+                        .put("error", it.error)
+                        .put("retry", it.retryCount),
                 )
             }
-            file(ctx).writeText(arr.toString())
+            // 先写临时文件再改名：写到一半被杀不会把整份历史写成半截 JSON。
+            val target = file(ctx)
+            val temp = File(target.parentFile, "$FILE_NAME.tmp")
+            temp.writeText(arr.toString())
+            if (!temp.renameTo(target)) {
+                target.writeText(arr.toString())
+                temp.delete()
+            }
         }.onFailure { Timber.w(it, "写入听写历史失败") }
     }
 
@@ -118,15 +363,20 @@ object VoiceStats {
         val activeDays: Int,
         val streakDays: Int,
         val longestStreakDays: Int,
+        /** 有录音、但还没能补出文字的条数。 */
+        val pendingRetry: Int = 0,
     )
 
     /** 打字速度按 40 字/分钟估，用来算「节省的时间」。 */
     private const val TYPING_WPM = 40
 
     fun compute(entries: List<VoiceHistory.Entry>): Snapshot {
-        if (entries.isEmpty()) return Snapshot(0, 0L, 0, 0L, 0, 0, 0)
+        val pending = entries.count { it.canRetry }
+        if (entries.isEmpty()) return Snapshot(0, 0L, 0, 0L, 0, 0, 0, 0)
 
-        val words = entries.sumOf { it.text.length }
+        // 失败条目没有文字，但这段声音确实花掉了时间：字数按 0 算，时长照算。
+        val written = entries.filter { it.hasText }
+        val words = written.sumOf { it.text.length }
         val totalMs = entries.sumOf { it.durationMs }
         val minutes = totalMs / 60000.0
         val avg = if (minutes > 0.05) (words / minutes).toInt() else 0
@@ -134,7 +384,7 @@ object VoiceStats {
         val typingMs = words.toDouble() / TYPING_WPM * 60000.0
         val saved = (typingMs - totalMs).toLong().coerceAtLeast(0L)
 
-        val days = entries.map { dayKey(it.atMillis) }.toSortedSet()
+        val days = written.map { dayKey(it.atMillis) }.toSortedSet()
         val longest = longestRun(days)
         val streak = currentRun(days)
 
@@ -146,6 +396,7 @@ object VoiceStats {
             activeDays = days.size,
             streakDays = streak,
             longestStreakDays = longest,
+            pendingRetry = pending,
         )
     }
 

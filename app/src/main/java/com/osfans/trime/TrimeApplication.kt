@@ -25,6 +25,8 @@ import com.osfans.trime.data.prefs.AppPrefs
 import com.osfans.trime.data.prefs.AppearanceManager
 import com.osfans.trime.data.theme.ColorManager
 import com.osfans.trime.data.theme.ThemeManager
+import com.osfans.trime.ime.voice.VoiceAudio
+import com.osfans.trime.ime.voice.VoiceHistory
 import com.osfans.trime.receiver.RimeIntentReceiver
 import com.osfans.trime.ui.main.LogActivity
 import com.osfans.trime.worker.BackgroundSyncWork
@@ -199,6 +201,12 @@ class TrimeApplication : Application() {
                 appPrefs.keyboard.vibrateOnKeyPress.setValue(true)
                 sharedPreferences.edit(commit = true) { putBoolean(HAPTICS_MIGRATION_KEY, true) }
             }
+            // 上次录音被打断（进程被杀 / 输入法被回收）：把半截 WAV 救回来，
+            // 并在历史里补一条失败记录。万物留痕——那段声音不该就这么没了。
+            runCatching {
+                val recovered = VoiceAudio.recoverInterrupted(ctx)
+                if (recovered.isNotEmpty()) VoiceHistory.adoptOrphans(ctx, recovered)
+            }.onFailure { Timber.w(it, "恢复上次中断的录音失败") }
             // record last pid for crash logs
             appPrefs.internal.pid.apply {
                 val currentPid = Process.myPid()

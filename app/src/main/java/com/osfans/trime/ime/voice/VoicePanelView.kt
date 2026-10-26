@@ -19,6 +19,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.osfans.trime.R
@@ -57,6 +58,7 @@ class VoicePanelView(
     var onSpaceSlide: ((dx: Int, dy: Int) -> Unit)? = null
     var onBackspaceTap: (() -> Unit)? = null
     var onActionTap: (() -> Unit)? = null
+    var onRetryTap: (() -> Unit)? = null
 
     /** 顶部切换胶囊，语音面板与打字键盘共用同一个组件。 */
     val toolbar =
@@ -101,6 +103,41 @@ class VoicePanelView(
             // 气泡跟着文字走，但最多占屏幕宽度减去两侧留白，不能顶到屏幕边。
             maxWidth = resources.displayMetrics.widthPixels - dp(80)
             visibility = GONE
+        }
+
+    /**
+     * 上一轮识别失败时，右上角那颗「重新识别」键。
+     *
+     * 位置是键区第 0 行第 2 列——和中间那颗大胶囊同一水平高度、在它右边，
+     * 也就是底栏本来就空着的那一格。**规格和 ⌫ 一样**：同一套键面底色、13dp 圆角、
+     * 同一格内缩；图标用正文色，不额外上蓝色——整块面板本来就只有黑白灰。
+     *
+     * 录音已经在本地存着了，用户不用为此专门跑一趟历史页。
+     * 只在 [VoiceState.Idle] 且确实有可重试的录音时显示。
+     */
+    private val retryIcon =
+        ImageView(context).apply {
+            setImageResource(R.drawable.ic_baseline_refresh_reversed_24)
+            setColorFilter(JvColors.text)
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            val pad = dp(11)
+            setPadding(pad, pad, pad, pad)
+        }
+
+    private val retryView =
+        FrameLayout(context).apply {
+            background = roundedDrawable(JvColors.keyBg, dp(KEY_CORNER_DP))
+            isClickable = true
+            visibility = GONE
+            addView(
+                retryIcon,
+                LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT),
+            )
+            setOnClickListener {
+                InputFeedbackManager.keyPressVibrate(this)
+                onRetryTap?.invoke()
+            }
+            contentDescription = "重新识别上一段录音"
         }
 
     private val orb =
@@ -229,6 +266,9 @@ class VoicePanelView(
             addKey(spaceKey { onSpaceTap?.invoke() }, row = 2, column = 1)
             addKey(actionKey, row = 2, column = 2)
             addKey(repeatKey("\u232B") { onBackspaceTap?.invoke() }, row = 1, column = 2)
+            // 第 0 行右列一直是空的，正好和胶囊同高：重试键放这儿，
+            // 规格与 ⌫ 一致，也不会像压在麦克风画布上那样被抢走点击。
+            addKey(retryView, row = 0, column = 2)
         }
 
     init {
@@ -319,6 +359,7 @@ class VoicePanelView(
             hidePunctuationMenuNow()
         }
         this.state = state
+        shrinkOrbHitArea(state == VoiceState.Idle)
         orb.state = state
         when (state) {
             VoiceState.Idle -> {
@@ -331,6 +372,7 @@ class VoicePanelView(
             }
 
             VoiceState.Recording -> {
+                retryView.visibility = GONE
                 statusView.visibility = GONE
                 hintView.visibility = VISIBLE
                 hintView.text = "再次点击以完成"
@@ -341,12 +383,39 @@ class VoicePanelView(
             }
 
             VoiceState.Thinking -> {
+                retryView.visibility = GONE
                 statusView.visibility = GONE
                 hintView.visibility = GONE
                 bottomBar.visibility = GONE
                 orb.level = 0f
             }
         }
+    }
+
+    /**
+     * 有没有可以重试的录音。空闲时在麦克风下面亮出「重新识别这段录音」，
+     * 录音 / 处理中一律收起来——那两种状态下这句话还没轮到最后一步。
+     */
+    fun setRetryAvailable(available: Boolean) {
+        retryView.visibility = if (available && state == VoiceState.Idle) VISIBLE else GONE
+    }
+
+    /**
+     * 麦克风那块的 **View 边界** 跟着画出来的形状走。
+     *
+     * 画布一直是 160dp 见方（录音圆 + 光晕要那么大），但空闲时只画一颗 56dp 高的胶囊。
+     * 边界不收，下面那颗「重新识别这段录音」就落在这块画布里，点上去触发的是录音
+     * ——实测踩过一次。空闲时把边界收到胶囊本身，两个按钮就真的分开了。
+     */
+    private fun shrinkOrbHitArea(idle: Boolean) {
+        val box = dp(ORB_BOX)
+        val height = if (idle) dp(VoiceOrbView.PILL_H) else box
+        val top = if (idle) dp(ORB_CENTER) - height / 2 else dp(ORB_CENTER - ORB_BOX / 2)
+        val lp = orb.layoutParams as? LayoutParams ?: return
+        if (lp.height == height && lp.topMargin == top) return
+        lp.height = height
+        lp.topMargin = top
+        orb.layoutParams = lp
     }
 
     /** 实时音量（0..1）。只有录音时波形才跟着走，其他状态一律落地。 */
@@ -573,6 +642,8 @@ class VoicePanelView(
             row.title.setTextColor(JvColors.text)
             row.hint.setTextColor(JvColors.textSecondary)
         }
+        retryIcon.setColorFilter(JvColors.text)
+        retryView.background = roundedDrawable(JvColors.keyBg, dp(KEY_CORNER_DP))
         orb.refreshColors()
     }
 
@@ -828,6 +899,7 @@ class VoicePanelView(
         private const val KEY_GAP_Y_DP = 6f
         private const val KEY_CORNER_DP = 13
         private const val BOTTOM_SAFE_DP = 20
+
     }
 }
 
@@ -1041,8 +1113,8 @@ class VoiceOrbView(
 
     companion object {
         /** 空闲/处理中胶囊：与 Typeless 同为 145×60（实测它的黑体高 60dp、宽 135dp）。 */
-        private const val PILL_W = 145f
-        private const val PILL_H = 60f
+        const val PILL_W = 145f
+        const val PILL_H = 60f
 
         /** 录音黑圆直径 128dp，外面套一圈 14dp 的光晕。 */
         private const val CIRCLE_R = 64f
