@@ -21,6 +21,7 @@ object VoicePrefs {
     const val KEY_RESOURCE_ID = "voice_resource_id"
     const val KEY_BOOSTING_TABLE_ID = "voice_boosting_table_id"
     const val KEY_HOTWORDS_ENABLED = "voice_hotwords_enabled"
+    const val KEY_MUTE_OTHER_AUDIO = "voice_mute_other_audio"
     const val KEY_PUNCTUATION_MODE = "voice_punctuation_mode"
     const val KEY_LAST_TAB = "voice_last_tab"
     const val KEY_TOS_ACCESS_KEY = "voice_tos_access_key"
@@ -48,6 +49,19 @@ object VoicePrefs {
         .trim()
 
     fun hotwordsEnabled(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_HOTWORDS_ENABLED, true)
+
+    /**
+     * 说话时按住别的 App 的音频（音乐、视频、播客）。
+     *
+     * 默认开启：说话时被自己的手机打断是最常见的干扰。想边听边说是少数场景，
+     * 设置页里可以关掉。
+     */
+    fun muteOtherAudio(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_MUTE_OTHER_AUDIO, true)
+
+    fun setMuteOtherAudio(
+        ctx: Context,
+        value: Boolean,
+    ) = prefs(ctx).edit { putBoolean(KEY_MUTE_OTHER_AUDIO, value) }
 
     /** 默认全标点：第一次用不丢东西，要改在键盘左下角一点就切。 */
     fun punctuationMode(ctx: Context): PunctuationMode = PunctuationMode.fromId(prefs(ctx).getString(KEY_PUNCTUATION_MODE, null))

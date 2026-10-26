@@ -93,6 +93,8 @@ object VoiceSession : VoiceEngine.Listener {
             // 输入法都销毁了，没人能接结果：别让它继续占麦克风。
             VoiceEngine.cancel()
         }
+        // 同样别占着别人的音频。焦点虽由系统兜底回收，主动还更及时。
+        DictationAudioFocus.release()
         state = VoiceState.Idle
         lastPartial = ""
         pending.setLength(0)
@@ -133,6 +135,9 @@ object VoiceSession : VoiceEngine.Listener {
             VoiceCaptureService.stop(svc)
             return
         }
+        // 麦克风已经拿到，再按住别的 App 的音频。拿不到焦点只是背景音按不住，
+        // 不影响本轮录音。
+        DictationAudioFocus.acquire(svc) { cancel() }
         lastPartial = ""
         state = VoiceState.Recording
         notifyState()
@@ -148,6 +153,7 @@ object VoiceSession : VoiceEngine.Listener {
         if (!VoiceEngine.isRecording) {
             VoiceEngine.cancel()
             VoiceCaptureService.stop(svc)
+            DictationAudioFocus.release()
             state = VoiceState.Idle
             lastPartial = ""
             notifyState()
@@ -156,6 +162,8 @@ object VoiceSession : VoiceEngine.Listener {
         state = VoiceState.Thinking
         notifyState()
         VoiceEngine.stopRecording()
+        // 麦克风已经停，立刻把声音还给别的 App——它们没必要陪着等文字整理完。
+        DictationAudioFocus.release()
         VoiceCaptureService.stop(svc)
     }
 
@@ -163,6 +171,7 @@ object VoiceSession : VoiceEngine.Listener {
     fun cancel() {
         VoiceEngine.cancel()
         service?.let { VoiceCaptureService.stop(it) }
+        DictationAudioFocus.release()
         state = VoiceState.Idle
         lastPartial = ""
         pending.setLength(0)

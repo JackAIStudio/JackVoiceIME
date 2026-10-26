@@ -1037,6 +1037,18 @@ class JackVoiceActivity :
             ) { choosePunctuationMode() },
         )
         voice.addView(Jv.divider(this))
+        voice.addView(
+            Jv.row(
+                this,
+                "说话时暂停其他应用的声音",
+                "音乐、视频、播客会让出声音；说完自动继续播",
+                trailing = if (VoicePrefs.muteOtherAudio(this)) "开" else "关",
+            ) {
+                VoicePrefs.setMuteOtherAudio(this, !VoicePrefs.muteOtherAudio(this))
+                select(Tab.Settings)
+            },
+        )
+        voice.addView(Jv.divider(this))
         val boostingTableId = VoicePrefs.boostingTableId(this)
         voice.addView(
             Jv.row(
