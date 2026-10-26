@@ -79,10 +79,25 @@ class Keyboard(
 
     var firstPressedKeyIndex: Int = -1
 
-    /** Keyboard default ascii mode  */
+    /**
+     * 这个布局**偏好的**中英状态（YAML 的 `ascii_mode`）。
+     *
+     * 只做偏好，默认不生效：切布局不再顺手改 Rime 的 `ascii_mode`。
+     * 语言只在两处变——顶栏胶囊的「拼 / EN」、输入框类型（密码/邮箱/数字）。
+     * 数字符号页里点一下就该只是换个键面，不能把用户的中文偷换成英文。
+     */
     val asciiMode = selfConfig?.asciiMode == 1
-    val resetAsciiMode = selfConfig?.resetAsciiMode ?: true
-    var lastAsciiMode: Boolean = asciiMode
+
+    /**
+     * 切进这个布局时要不要把 Rime 切到 [asciiMode]。
+     *
+     * 默认 **false**：以前默认是 true，于是「123 页 → 左下角回字母」这一趟会
+     * 先把语言强制切成英文、再强制切回中文，顶栏胶囊跟着来回跳，
+     * 组合中的拼写还会被这一趟顺手确认掉（输入框里留下 `ni hao`）。
+     * 真的需要「进这页就切英文」的布局（英文方案自带的键盘）在 YAML 里显式写
+     * `reset_ascii_mode: true`。`mode_switch` 的默认值由它兜底。
+     */
+    val resetAsciiMode = selfConfig?.resetAsciiMode ?: false
 
     val landscapeKeyboard: String? = selfConfig?.landscapeKeyboard
     private val preferredSplitPercent by AppPrefs.defaultInstance().keyboard.splitSpacePercent

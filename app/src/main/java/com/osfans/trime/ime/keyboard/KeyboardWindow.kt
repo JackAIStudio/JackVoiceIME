@@ -369,7 +369,6 @@ class KeyboardWindow(di: DI) :
             it.onDetach()
             keyboardView.removeView(it)
         }
-        activeKeyboard?.lastAsciiMode = rime.run { statusCached }.isAsciiMode
     }
 
     /** 计算键盘可用宽度：优先使用已测量的容器宽度，否则回退到系统窗口测量。 */
@@ -424,7 +423,6 @@ class KeyboardWindow(di: DI) :
 
         if (activeKeyboard == null) {
             cachedKeyboards[target] = keyboard to view
-            keyboard.lastAsciiMode = keyboard.asciiMode
         }
 
         keyboard.also {
@@ -432,10 +430,16 @@ class KeyboardWindow(di: DI) :
             if (it.isLock) lastLockKeyboardId = target
             dispatchCapsState(it::setShifted)
 
-            val currentMode = rime.run { statusCached }.isAsciiMode
-            val targetMode = if (it.resetAsciiMode) it.asciiMode else it.lastAsciiMode
-
-            if (currentMode != targetMode) {
+            // 换布局**不碰语言**：中英只由顶栏胶囊和输入框类型决定。
+            // 这里以前会按布局的 ascii_mode 顺手 setRuntimeOption，于是
+            // 「123 → 字母键回键盘」一来一回就是「强制英文、再强制中文」，
+            // 顶栏胶囊乱跳，组合中的拼写还会被顺手确认上屏。
+            // 只有 YAML 里显式写了 reset_ascii_mode: true 的布局才允许这么做。
+            asciiModeOnAttach(
+                resetAsciiMode = it.resetAsciiMode,
+                layoutAsciiMode = it.asciiMode,
+                currentAsciiMode = rime.run { statusCached }.isAsciiMode,
+            )?.let { targetMode ->
                 service.postRimeJob {
                     commitComposition()
                     setRuntimeOption("ascii_mode", targetMode)
@@ -609,7 +613,9 @@ class KeyboardWindow(di: DI) :
                 tempAsciiMode = null
             } ?: activeKeyboard?.let {
                 if (theme.style.resetAsciiModeOnFocusChange) {
-                    val targetMode = if (it.resetAsciiMode) it.asciiMode else it.lastAsciiMode
+                    // 这里也只在布局显式 opt-in 时才动语言；没写 reset_ascii_mode 的布局
+                    // 就沿用当前语言，免得换个输入框把用户选的拼音/EN 顶掉。
+                    val targetMode = if (it.resetAsciiMode) it.asciiMode else isAsciiMode
                     if (isAsciiMode != targetMode) {
                         service.postRimeJob { setRuntimeOption("ascii_mode", targetMode) }
                     }

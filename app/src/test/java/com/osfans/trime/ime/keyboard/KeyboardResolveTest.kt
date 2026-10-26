@@ -140,4 +140,49 @@ class KeyboardResolveTest :
                 }
             }
         }
+
+        // 回归：换布局不许顺手切语言。以前 123 页（ascii_mode: 1）一点就把中文
+        // 切成了英文，左下角那颗键回字母时又切回中文，顶栏胶囊跟着乱跳，
+        // 组合中的拼写还会被这一趟确认上屏。
+        Given("the ascii mode picked when a layout is attached") {
+            When("the layout does not opt in to switching language") {
+                Then("the language is left alone, whatever the layout prefers") {
+                    asciiModeOnAttach(
+                        resetAsciiMode = false,
+                        layoutAsciiMode = true,
+                        currentAsciiMode = false,
+                    ) shouldBe null
+                    asciiModeOnAttach(
+                        resetAsciiMode = false,
+                        layoutAsciiMode = false,
+                        currentAsciiMode = true,
+                    ) shouldBe null
+                }
+            }
+
+            When("an opted-in layout agrees with the current language") {
+                Then("nothing is emitted") {
+                    asciiModeOnAttach(
+                        resetAsciiMode = true,
+                        layoutAsciiMode = false,
+                        currentAsciiMode = false,
+                    ) shouldBe null
+                }
+            }
+
+            When("an opted-in layout disagrees with the current language") {
+                Then("it overrides, in both directions") {
+                    asciiModeOnAttach(
+                        resetAsciiMode = true,
+                        layoutAsciiMode = true,
+                        currentAsciiMode = false,
+                    ) shouldBe true
+                    asciiModeOnAttach(
+                        resetAsciiMode = true,
+                        layoutAsciiMode = false,
+                        currentAsciiMode = true,
+                    ) shouldBe false
+                }
+            }
+        }
     })

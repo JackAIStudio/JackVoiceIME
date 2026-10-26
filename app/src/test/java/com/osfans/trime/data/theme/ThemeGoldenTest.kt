@@ -126,6 +126,25 @@ class ThemeGoldenTest :
                     theme.presetColorSchemes.getValue("default")["dark_scheme"] shouldBe "jv_dark"
                 }
 
+                // 回归：数字页只是换键面，不许改语言。以前 symbols/symbols2 写了
+                // ascii_mode: 1，点一下 123 就把中文强制切成英文；左下角那颗键
+                // 又标成「拼音」，看着像语言开关，回字母时把英文强制切回中文。
+                Then("the number pages neither switch language nor pretend to") {
+                    listOf("symbols", "symbols2").forEach { id ->
+                        val page = theme.presetKeyboards.getValue(id)
+                        page.resetAsciiMode shouldBe false
+                        page.keys.none { it.click == KeyActionToken.Plain("Mode_switch") } shouldBe true
+                    }
+
+                    val backToLetters = theme.presetKeys.getValue("Keyboard_letters")
+                    backToLetters.label shouldBe "字母"
+                    backToLetters.toggle shouldBe ""
+                    backToLetters.select shouldBe ".default"
+
+                    // 语言切换只留在顶栏胶囊里
+                    theme.presetKeys.getValue("Mode_switch").toggle shouldBe "ascii_mode"
+                }
+
                 Then("all 19 plain keyboards are decoded with their keys") {
                     theme.presetKeyboards.size shouldBe 19
                     theme.presetKeyboards shouldContainKey "default"

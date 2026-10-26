@@ -967,7 +967,9 @@ preset_keys:
   Keyboard_mini: {label: 迷你, send: Eisu_toggle, select: mini}
   Keyboard_letter: {label: 字母, send: Eisu_toggle, select: default}
   Keyboard_default: {label: 返回, send: Eisu_toggle, select: .default}
-  Keyboard_letters: {label: 拼音, send: Eisu_toggle, select: .default}
+  # 数字页左下角「回字母键盘」。只是换布局，**不切语言**——中英在顶栏胶囊里。
+  # 以前这颗键叫「拼音」，看起来像是语言开关，点一下还会把英文强制切回中文。
+  Keyboard_letters: {label: 字母, send: Eisu_toggle, select: .default}
   Keyboard_switch: {label: 鍵盤, send: Eisu_toggle, select: .next}
   liquid_keyboard_switch: { label: 更多, send: FUNCTION, command: liquid_keyboard, option: "更多" }
   liquid_keyboard_exit: {label: 返回, send: FUNCTION, command: liquid_keyboard, option: "-1"}  #退出liquidkeyboard
@@ -1348,7 +1350,8 @@ preset_keyboards:
   symbols:
     name: 数字与符号
     author: "Jack"
-    ascii_mode: 1
+    # 不设 ascii_mode / reset_ascii_mode：换键面不该改语言。
+    # （以前写了 ascii_mode: 1，于是点一下 123 就把中文强制切成英文。）
     width: 10
     height: 45
     horizontal_gap: 9
@@ -1392,7 +1395,7 @@ preset_keyboards:
   symbols2:
     name: 更多符号
     author: "Jack"
-    ascii_mode: 1
+    # 同上：只换键面，不改语言。
     width: 10
     height: 45
     horizontal_gap: 9

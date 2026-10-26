@@ -59,3 +59,22 @@ internal fun pickLandscape(
     landscapeValue: Int,
     landscape: Boolean,
 ): Int = if (landscape && landscapeValue > 0) landscapeValue else value
+
+/**
+ * What ascii_mode should become when a keyboard layout is attached, or null to
+ * leave it alone.
+ *
+ * Switching layouts must not switch languages: the user picks 中/英 in the
+ * toolbar capsule, and an editor may force ASCII. A layout only overrides that
+ * when it explicitly opts in with `reset_ascii_mode: true` (the `letter`
+ * keyboard of the English schema does).
+ *
+ * Previously every layout carried a preference and applied it, so
+ * `123 → 字母` flipped the language to English and straight back to Chinese,
+ * which also committed any composition in progress.
+ */
+internal fun asciiModeOnAttach(
+    resetAsciiMode: Boolean,
+    layoutAsciiMode: Boolean,
+    currentAsciiMode: Boolean,
+): Boolean? = if (resetAsciiMode && layoutAsciiMode != currentAsciiMode) layoutAsciiMode else null

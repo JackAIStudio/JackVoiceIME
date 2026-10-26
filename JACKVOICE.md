@@ -41,8 +41,17 @@
   上下拖动只在多行输入框里发方向键；光标到文本首尾就停住，不会把焦点移出输入框。
   没拖动就松手仍然按一次空格，轻点不受影响。语音面板底栏的空格走同一套
   `GestureFrame`/`moveCursorBy`，不是另写一份
-- 123 页照 Typeless 抄：数字 / 半角符号 / `#+=`+中文标点 / `拼音`+空格+动作键；
+- 123 页照 Typeless 抄：数字 / 半角符号 / `#+=`+中文标点 / `字母`+空格+动作键；
   `#+=` 进第二页（`symbols2`），第二页左下角 `123` 回第一页
+- **换布局不改语言**：`symbols` / `symbols2` 都**不写** `ascii_mode`，也不写
+  `reset_ascii_mode`。中英只由顶栏胶囊 `[🎙|拼|EN]` 和输入框类型（密码 / 邮箱 /
+  数字强制 ASCII）决定。以前这两页写了 `ascii_mode: 1`，`Keyboard.resetAsciiMode`
+  又默认跟着布局强制生效，于是点一下 123 就把中文切成英文、组合中的拼写还被顺手
+  确认上屏；左下角那颗键回字母时再强制切回中文，胶囊来回跳。
+  现在 `resetAsciiMode` 默认 **false**，只有 YAML 显式写 `reset_ascii_mode: true`
+  的布局（英文方案的 `letter`）才允许切语言，判定收在 `asciiModeOnAttach()`
+  （`KeyboardResolve.kt`）。数字页左下角那颗键是**回字母键盘**，所以标签叫「字母」，
+  别改回「拼音」——它不做语言切换
 - **英文不留组合下划线**：英文不需要「确认」，所以 EN 只是 `ascii_mode`，字母直接上屏；
   候选由 `EnglishCompleter`（`assets/en_words.txt`，9.5k 常用词，词频序）按前缀给，
   点中就把刚打的词干换成整词。走 Rime 方案的话必然会带组合下划线，做不到这个观感
@@ -84,6 +93,7 @@ q w e r t y u i o p        ← 按键
 | `Rime.kt` 的 `inlinePreeditMode` | 强制 `COMPOSING_TEXT`：拼音字母直接进输入框；预编辑里的 `‸`(U+2038) 光标标记必须剥掉，不然会被当正文写进输入框 |
 | 主题 `CommitAction` 键 | 底行动作键。组合中第一下只做「确认」：把下划线里的原始拼写原样上屏（`nihao` → `nihao`），不选中文候选、也不触发搜索/前往；组合结束后再按才执行宿主 `imeOptions` 动作 |
 | 展开候选面板（`CandidatePanelView`） | Rime 一次只交 16 条（JNI `getBulkCandidates` 的 bulk 上限），滑到底要靠 `CandidatePages` 按**全量下标**用 `getCandidates(offset, limit)` 一批批要；点候选传的也是全量下标，别改成面板里的序号 |
+| `Keyboard.resetAsciiMode` | 默认 **false**：换布局不碰 `ascii_mode`。只有显式写 `reset_ascii_mode: true` 的布局（英文方案的 `letter`）才切语言，判定在 `asciiModeOnAttach()`。新增键盘布局时**别**顺手加 `ascii_mode`，数字/符号页尤其不能加——那会让点 123 变成切英文 |
 
 ## 外观与深色模式
 
