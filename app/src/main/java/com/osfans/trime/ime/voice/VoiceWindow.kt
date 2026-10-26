@@ -139,7 +139,12 @@ class VoiceWindow(di: DI) :
         when (VoiceSession.state) {
             VoiceState.Idle -> VoiceSession.start()
             VoiceState.Recording -> VoiceSession.stop()
-            VoiceState.Thinking -> Unit
+            // 等终稿时点一下 = 算了，别等了。
+            //
+            // 这里原来是 Unit：只要收尾卡住（服务端不回终稿、连接异常、兜底定时器
+            // 因为别的异常没挂上），面板就永远是 Thinking，而唯一的按钮又什么都不做，
+            // 用户只能看着它转圈，没有任何恢复手段。
+            VoiceState.Thinking -> VoiceSession.cancel()
         }
     }
 

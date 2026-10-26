@@ -142,12 +142,21 @@ object VoiceEngine {
         isWaitingFinal = true
         stopAt = System.currentTimeMillis()
         Log.i(TAG, "停止录音：发末包，等终稿（上限 ${FINAL_TIMEOUT_MS}ms），当前一遍结果 ${result.length} 字")
-        recorder?.stop()
+
+        // 兜底必须先挂上，再做收尾。
+        //
+        // 原来这一行在函数最后：只要 recorder.stop() / asr.stop() 中途抛出，
+        // 定时器就永远挂不上，而 isWaitingFinal 已经为 true、面板已经是 Thinking，
+        // 于是卡死且没有任何恢复路径（Thinking 状态下麦克风键是空操作）。
+        // 兜底排在可能失败的动作之后，就不是兜底了。
+        main.postDelayed({ finish(fromTimeout = true) }, FINAL_TIMEOUT_MS)
+
+        // 收尾动作各自隔离：任何一个失败都不该连累其余步骤和上面的定时器。
+        runCatching { recorder?.stop() }
         recorder = null
-        asr?.stop()
+        runCatching { asr?.stop() }
         // 停录这一刻波形就该落地，别等终稿或超时。
         post { listener?.onLevel(0f) }
-        main.postDelayed({ finish(fromTimeout = true) }, FINAL_TIMEOUT_MS)
     }
 
     /** 直接丢弃，不上屏。 */

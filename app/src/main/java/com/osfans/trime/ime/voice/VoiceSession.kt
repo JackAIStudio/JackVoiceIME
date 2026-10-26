@@ -142,6 +142,17 @@ object VoiceSession : VoiceEngine.Listener {
     fun stop() {
         val svc = service ?: return
         if (state != VoiceState.Recording) return
+        // 以引擎为准：面板显示在录，但引擎可能已经自己收场了（出错后 finishWithError
+        // 已经把 isRecording 置 false）。这时 stopRecording() 会在开了守卫后直接返回，
+        // 超时兜底也就挂不上，状态会永远停在 Thinking。直接收尾回空闲。
+        if (!VoiceEngine.isRecording) {
+            VoiceEngine.cancel()
+            VoiceCaptureService.stop(svc)
+            state = VoiceState.Idle
+            lastPartial = ""
+            notifyState()
+            return
+        }
         state = VoiceState.Thinking
         notifyState()
         VoiceEngine.stopRecording()
