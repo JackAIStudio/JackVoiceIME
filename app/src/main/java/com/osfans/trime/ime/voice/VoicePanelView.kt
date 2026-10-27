@@ -110,6 +110,36 @@ class VoicePanelView(
             gravity = Gravity.CENTER
         }
 
+    /**
+     * 空闲态中央那句提示。**面板中央只有 [statusView] 一个 TextView**，
+     * 它显示哪一句只由 [renderCenterStatus] 决定。
+     *
+     * 以前这里和 `retryingView` 是两个叠在同一坐标上的 TextView，
+     * `showMessage()`、`setRetrying()`、`setState()` 各写各的可见性，
+     * 结果就是截图里「点击说话」「正在重新识别…」和提示文字糊成一团。
+     */
+    private var centerMessage: String? = null
+
+    /** 重新识别是否真的在跑。和视图分开存，避免用 visibility 反推状态。 */
+    private var retryingBusy = false
+
+    private var retryingProgress = 0f
+
+    /** 触控板提示是否正占着面板中央。 */
+    private var trackpadActive = false
+
+    /** 录音时网络断掉的原因；提示条恢复时要靠它决定说哪一句。 */
+    private var asrDegraded = false
+
+    private var asrNotice = ""
+
+    private val clearCenterMessage =
+        Runnable {
+            centerMessage = null
+            renderCenterStatus()
+            refreshRecordingHint()
+        }
+
     private val hintView =
         TextView(context).apply {
             setTextColor(JvColors.textSecondary)
@@ -185,19 +215,6 @@ class VoicePanelView(
         }
 
     // ── 重新识别：进度与预览 ────────────────────────────────────────────
-
-    /**
-     * 「正在重新识别…」。放在空闲态那句「点击说话」的位置上：
-     * 用户点了刷新之后，视线还停在那儿，不该让他去别处找进度。
-     */
-    private val retryingView =
-        TextView(context).apply {
-            setTextColor(JvColors.textSecondary)
-            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
-            gravity = Gravity.CENTER
-            text = "正在重新识别…"
-            visibility = GONE
-        }
 
     /**
      * 重新识别没有进度、也没有终点的承诺；给一颗明确的「取消」，
@@ -451,15 +468,7 @@ class VoicePanelView(
                 topMargin = dp(97)
             },
         )
-        // 进度和预览卡片都占空闲态「点击说话」那一带：用户点完刷新，
-        // 视线就停在那儿，结果不该出现在别处。
-        addView(
-            retryingView,
-            LayoutParams(LayoutParams.WRAP_CONTENT, dp(22)).apply {
-                gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-                topMargin = dp(97)
-            },
-        )
+        // 进度和「点击说话」共用上面那一个 statusView，绝不能再叠第二个 TextView。
         addView(
             retryCancelView,
             LayoutParams(LayoutParams.WRAP_CONTENT, dp(28)).apply {
@@ -564,7 +573,10 @@ class VoicePanelView(
             hidePunctuationMenuNow()
             // 录音 / 等终稿时用户已经表达了别的意图：预览卡片和进度都收掉。
             previewCard.visibility = GONE
-            retryingView.visibility = GONE
+            retryingBusy = false
+            retryCancelView.visibility = GONE
+            centerMessage = null
+            removeCallbacks(clearCenterMessage)
         }
         this.state = state
         // 麦克风可能因为预览卡片让过位，任何状态切换都先把它要回来；
@@ -574,8 +586,6 @@ class VoicePanelView(
         orb.state = state
         when (state) {
             VoiceState.Idle -> {
-                statusView.visibility = VISIBLE
-                statusView.text = "点击说话"
                 hintView.visibility = GONE
                 bottomBar.visibility = VISIBLE
                 clearPreview()
@@ -584,23 +594,23 @@ class VoicePanelView(
 
             VoiceState.Recording -> {
                 retryView.visibility = GONE
-                statusView.visibility = GONE
                 hintView.visibility = VISIBLE
-                hintView.text = "再次点击以完成"
                 bottomBar.visibility = GONE
                 // 新一次录音从空白开始，别把上一次的预览留在屏幕上。
                 clearPreview()
                 orb.level = 0f
+                refreshRecordingHint()
             }
 
             VoiceState.Thinking -> {
                 retryView.visibility = GONE
-                statusView.visibility = GONE
                 hintView.visibility = GONE
                 bottomBar.visibility = GONE
                 orb.level = 0f
             }
         }
+        // 中央提示只有一个出口：状态、重识别、临时提示、触控板都汇到这里。
+        renderCenterStatus()
         // 状态一变就重算一次刷新键：它同时受「状态」和「有没有可重试录音」两个条件约束，
         // 以前只有外部显式推的时候才更新，漏推一次就再也不出现。
         applyRetryVisibility()
@@ -646,8 +656,7 @@ class VoicePanelView(
             if (state == VoiceState.Idle) {
                 orb.visibility = VISIBLE
                 bottomBar.visibility = VISIBLE
-                statusView.visibility = VISIBLE
-                statusView.text = "点击说话"
+                renderCenterStatus()
             }
             return
         }
@@ -658,8 +667,8 @@ class VoicePanelView(
         // 卡片占满整块面板，麦克风、提示、底栏统统让位：
         // 这一屏的唯一任务就是「要不要这段字」，别让别的东西分心或挡住。
         orb.visibility = GONE
-        statusView.visibility = GONE
         bottomBar.visibility = GONE
+        renderCenterStatus()
     }
 
     /** 正在重新识别：面板上给一句进度，而不是让用户对着「点击说话」等。 */
@@ -668,29 +677,43 @@ class VoicePanelView(
         progress: Float = 0f,
     ) {
         if (state != VoiceState.Idle) return
-        retryingView.visibility = if (busy) VISIBLE else GONE
+        retryingBusy = busy
+        retryingProgress = progress.coerceIn(0f, 1f)
         retryCancelView.visibility = if (busy) VISIBLE else GONE
-        retryingView.text =
-            when {
-                !busy -> "正在重新识别…"
-                progress > 0f -> "正在重新识别 ${(progress * 100).toInt().coerceIn(0, 100)}%"
-                else -> "正在重新识别…"
-            }
         if (busy) {
             // 跑的时候把麦克风、提示、底栏都让开，只留进度。
-            statusView.visibility = GONE
             previewCard.visibility = GONE
             orb.visibility = GONE
             bottomBar.visibility = GONE
-            return
+        } else {
+            // 跑完了：以**预览卡片**为准决定谁露面。
+            // 卡片开着就整块让给它，否则把空闲态那套摆回来。
+            val hasPreview = previewCard.visibility == VISIBLE
+            orb.visibility = if (hasPreview) GONE else VISIBLE
+            bottomBar.visibility = if (hasPreview) GONE else VISIBLE
         }
-        // 跑完了：以**预览卡片**为准决定谁露面。
-        // 卡片开着就整块让给它，否则把空闲态那套摆回来。
-        val hasPreview = previewCard.visibility == VISIBLE
-        orb.visibility = if (hasPreview) GONE else VISIBLE
-        statusView.visibility = if (hasPreview) GONE else VISIBLE
-        bottomBar.visibility = if (hasPreview) GONE else VISIBLE
-        statusView.text = "点击说话"
+        renderCenterStatus()
+    }
+
+    /**
+     * 面板中央唯一的渲染入口。
+     *
+     * 优先级固定为：预览卡片 > 重新识别 > 触控板 > 临时提示 > 当前状态。
+     * 同一时刻**只会有一个** `TextView` 可见，这样无论回调以什么顺序到达，
+     * 都不会再出现两句话叠在一起。
+     */
+    private fun renderCenterStatus() {
+        val text =
+            VoiceCenterStatus.resolve(
+                state = state,
+                previewVisible = previewCard.visibility == VISIBLE,
+                retrying = retryingBusy,
+                retryProgress = retryingProgress,
+                trackpadActive = trackpadActive,
+                message = centerMessage,
+            )
+        statusView.text = text.orEmpty()
+        statusView.visibility = if (text == null) GONE else VISIBLE
     }
 
     /**
@@ -701,15 +724,24 @@ class VoicePanelView(
      * 而不是对着一个不出字的面板猜是不是坏了。
      */
     fun setAsrDegraded(degraded: Boolean, notice: String = "") {
+        asrDegraded = degraded
+        asrNotice = notice
         if (state != VoiceState.Recording) return
-        hintView.visibility = VISIBLE
+        refreshRecordingHint()
+    }
+
+    /** 录音态下方那句提示。预览气泡出现时让它先收起，气泡消失后要能回来。 */
+    private fun refreshRecordingHint() {
+        if (state != VoiceState.Recording) return
         hintView.text =
-            if (degraded) {
-                val reason = notice.ifBlank { "网络没连上" }
+            if (asrDegraded) {
+                val reason = asrNotice.ifBlank { "网络没连上" }
                 "$reason，先录着 · 再次点击完成"
             } else {
                 "再次点击以完成"
             }
+        hintView.visibility =
+            if (previewView.visibility == VISIBLE || trackpadActive) GONE else VISIBLE
     }
 
     /**
@@ -749,8 +781,9 @@ class VoicePanelView(
         val visible = shown.isNotEmpty()
         previewView.visibility = if (visible) VISIBLE else GONE
         // 有实时文字时把「再次点击以完成」让出来：两行预览更重要，而且这一格
-        // 就在它正上方，同时显示会挤在一起。
-        if (visible) hintView.visibility = GONE
+        // 就在它正上方，同时显示会挤在一起。预览清空后提示要自己回来，
+        // 不能像以前那样一收就永远不显示。
+        refreshRecordingHint()
     }
 
     private fun clearPreview() {
@@ -975,11 +1008,24 @@ class VoicePanelView(
         orb.refreshColors()
     }
 
+    /**
+     * 一行临时提示。只写入 [centerMessage]，由 [renderCenterStatus] 统一决定
+     * 它能不能露出来——重新识别、预览卡片、录音态都比它优先。
+     *
+     * 以前这里直接 `statusView.visibility = VISIBLE`，于是「正在重新识别…」刚
+     * 显示出来就被这句提示按回同一层，两句话叠在一起；录音时还会把
+     * 「再次点击以完成」收掉再也不还回来。现在提示会自己过期，
+     * 过期后回到当前状态该显示的那一句。
+     */
     fun showMessage(message: String) {
-        statusView.visibility = VISIBLE
-        statusView.text = message
-        hintView.visibility = GONE
-        clearPreview()
+        removeCallbacks(clearCenterMessage)
+        centerMessage = message
+        if (state == VoiceState.Idle) {
+            clearPreview()
+        }
+        renderCenterStatus()
+        refreshRecordingHint()
+        postDelayed(clearCenterMessage, MESSAGE_DURATION_MS)
     }
 
     /**
@@ -1043,30 +1089,33 @@ class VoicePanelView(
 
     /** 长按空格：底栏淡出，浮出「移动光标」。和打字键盘的触控板提示一致。 */
     private fun setTrackpadActive(active: Boolean) {
+        trackpadActive = active
         bottomBar.animate().cancel()
         trackpadHint.animate().cancel()
         if (active) {
             bottomBar.animate().alpha(0.22f).setDuration(120).start()
-            statusView.visibility = GONE
             trackpadHint.visibility = VISIBLE
             trackpadHint.animate().alpha(1f).setDuration(90).start()
         } else {
             bottomBar.animate().alpha(1f).setDuration(120).start()
-            statusView.visibility = if (state == VoiceState.Idle) VISIBLE else GONE
             trackpadHint.animate().alpha(0f).setDuration(90).withEndAction {
                 if (trackpadHint.alpha == 0f) trackpadHint.visibility = GONE
             }.start()
         }
+        renderCenterStatus()
+        refreshRecordingHint()
     }
 
     /** 切走或开始录音时把触控板状态立即收干净，避免底栏停在半透明。 */
     private fun resetTrackpad() {
+        trackpadActive = false
         bottomBar.animate().cancel()
         bottomBar.alpha = 1f
         trackpadHint.animate().cancel()
         trackpadHint.alpha = 0f
         trackpadHint.visibility = GONE
-        statusView.visibility = if (state == VoiceState.Idle) VISIBLE else GONE
+        renderCenterStatus()
+        refreshRecordingHint()
     }
 
     override fun onDetachedFromWindow() {
@@ -1237,6 +1286,9 @@ class VoicePanelView(
 
         /** 预览气泡最多留多少字；再多就取最后一段，两行放得下。 */
         private const val PREVIEW_MAX_CHARS = 30
+
+        /** 临时提示显示多久。过期后中央回到「点击说话」或当前进度。 */
+        private const val MESSAGE_DURATION_MS = 2600L
 
         /**
          * 重新识别预览卡片的位置与高度（dp）。

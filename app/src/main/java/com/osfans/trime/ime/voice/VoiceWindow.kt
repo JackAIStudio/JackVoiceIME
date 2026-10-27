@@ -200,8 +200,8 @@ class VoiceWindow(di: DI) :
     }
 
     private fun onRetryTap() {
-        // 进度由 VoiceSession.retryingEntryId 驱动（setRetrying），
-        // 别再在这里 showMessage——两处都写 statusView 会互相盖掉。
+        // 进度由 VoiceSession.retryingEntryId 驱动（setRetrying）。
+        // 面板中央现在只有一个渲染入口，提示和进度不会再叠字。
         VoiceSession.retryLast()
     }
 
@@ -215,17 +215,19 @@ class VoiceWindow(di: DI) :
 
     override fun onVoiceNotice(text: String) {
         val view = panel ?: return
+        // 顺序很重要：先把重识别的真实状态摆好，再写这句提示。
+        // 两者现在汇到同一个中央渲染入口，重识别进行中时提示不会顶掉进度，
+        // 也不会再出现「点击说话 / 正在重新识别 / 提示」三层文字叠在一起。
+        syncRetrying(view)
         view.showMessage(text)
         syncRetryButton()
-        // 「正在重新识别…」不是普通提示：它要把麦克风、底栏让开，
-        // 并亮出「取消」。只写 showMessage 会留下一个可点的麦克风，用户更迷惑。
-        syncRetrying(view)
+        // 提示自己会过期（VoicePanelView 内部计时），这里只负责让刷新键
+        // 在提示结束后重新同步一次；不要再用 setState(Idle) 硬刷整块面板。
         noticeJob?.cancel()
         noticeJob =
             service.lifecycleScope.launch {
                 delay(2600)
                 if (VoiceSession.state == VoiceState.Idle) {
-                    view.setState(VoiceState.Idle)
                     syncRetryButton()
                 }
             }

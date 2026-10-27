@@ -44,6 +44,10 @@ class LocalAsrClient(
     private val queue = LinkedBlockingQueue<ByteArray>()
     private val stopMarker = ByteArray(0)
 
+    /** `stop()` 之后不再接收新的 PCM；worker 还要把 stop 之前的都吃完。 */
+    @Volatile
+    private var stopped = false
+
     @Volatile
     private var cancelled = false
 
@@ -56,15 +60,22 @@ class LocalAsrClient(
             }
     }
 
-    /** @return false 表示队列满了，这一块没进去。 */
+    /** @return false 表示已停止 / 已取消，这一块不再进入识别。 */
     fun feed(pcm: ByteArray): Boolean {
-        if (cancelled) return false
+        if (cancelled || stopped) return false
         return queue.offer(pcm)
     }
 
-    /** 排进结束标记；worker 会先吃完前面的音频，再 inputFinished。 */
+    /**
+     * 排进结束标记；worker 会先吃完前面的音频，再补尾、inputFinished。
+     *
+     * 标记只排一次。录音线程的收尾和 UI 的 stop 可能前后脚都调到这里，
+     * 排两个标记不会出错，但第一个就会让 worker 返回，第二个永远没人取；
+     * 更重要的是别让 `stopped` 之后还有音频挤在标记后面，那才是真正的断尾。
+     */
     fun stop() {
-        if (cancelled) return
+        if (cancelled || stopped) return
+        stopped = true
         if (!queue.offer(stopMarker)) {
             listener.onError("本地识别队列忙，请稍后再试")
         }
@@ -72,6 +83,7 @@ class LocalAsrClient(
 
     fun cancel() {
         cancelled = true
+        stopped = true
         queue.clear()
         queue.offer(stopMarker)
     }
@@ -90,8 +102,7 @@ class LocalAsrClient(
             while (!cancelled) {
                 val chunk = queue.take()
                 if (chunk === stopMarker) {
-                    stream.inputFinished()
-                    while (recognizer.isReady(stream)) recognizer.decode(stream)
+                    LocalAsrEngine.finishStream(recognizer, stream, hasAudio = totalSamples > 0)
                     val text = recognizer.getResult(stream).text.trim()
                     val audioSec = totalSamples.toDouble() / SAMPLE_RATE
                     val elapsedSec = (System.currentTimeMillis() - startedAt) / 1000.0
@@ -131,7 +142,6 @@ class LocalAsrClient(
 
     companion object {
         private const val SAMPLE_RATE = 16_000
-
     }
 }
 
@@ -144,6 +154,44 @@ class LocalAsrClient(
 object LocalAsrEngine {
     private var recognizer: OnlineRecognizer? = null
     private var loadedDir: String? = null
+
+    /**
+     * 结束流式识别前补的尾部静音。
+     *
+     * 模型是 480ms chunk 的流式 zipformer，encoder 需要右上下文才能把最后一个
+     * chunk 的音节解出来。以前直接 `inputFinished()`，末尾不足一个 chunk 的
+     * 音频没有完整右上下文，最后几个字就丢了——云端有两遍终稿，所以看起来
+     * 只有本地会「断尾」。sherpa-onnx 官方 `online-decode-files.py` 同样在
+     * `input_finished()` 前补 0.66 秒静音，这里取同一量级。
+     *
+     * 只补静音，不伪造任何语音；`inputFinished()` 仍要在这之后调用。
+     *
+     * 实测（同一份模型 + 真机录音）：不补尾会稳定丢掉最后一个字，
+     * 0.33 秒仍然不够，0.66 秒能补齐；1.0 秒没有额外收益，所以取 0.66。
+     */
+    internal const val TAIL_PADDING_SECONDS = 0.66f
+    internal const val SAMPLE_RATE = 16_000
+
+    internal val tailPadding: FloatArray
+        get() = FloatArray((TAIL_PADDING_SECONDS * SAMPLE_RATE).toInt())
+
+    /**
+     * 补尾、标结束、把最后几个 chunk 解完。
+     *
+     * 顺序不能反：先 `acceptWaveform(tailPadding)`，再 `inputFinished()`。
+     * 补尾放在 `inputFinished()` 之后不会进入特征流，等于没补。
+     */
+    internal fun finishStream(
+        recognizer: OnlineRecognizer,
+        stream: OnlineStream,
+        hasAudio: Boolean,
+    ) {
+        if (hasAudio) {
+            stream.acceptWaveform(tailPadding, SAMPLE_RATE)
+        }
+        stream.inputFinished()
+        while (recognizer.isReady(stream)) recognizer.decode(stream)
+    }
 
     @Synchronized
     fun get(modelDir: File): OnlineRecognizer {
@@ -238,8 +286,8 @@ object LocalAsrEngine {
                 return ""
             }
             if (isCancelled?.invoke() == true) return ""
-            stream.inputFinished()
-            while (recognizer.isReady(stream)) recognizer.decode(stream)
+            // 重识别也必须补尾：同一个模型、同一个「最后几个字解不出来」的问题。
+            finishStream(recognizer, stream, hasAudio = totalBytes > 0)
             return recognizer.getResult(stream).text.trim()
         } finally {
             runCatching { stream.release() }

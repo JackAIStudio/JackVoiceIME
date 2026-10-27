@@ -104,12 +104,31 @@ class VoiceRecorder(
         return true
     }
 
+    /**
+     * 停止录音，并**等录音线程真的退出**再返回。
+     *
+     * 顺序很要紧：先让 `running=false`，等当前这次 `read` 把手上那 100ms 读完
+     * （通常几十毫秒），线程自然退出；实在卡住才用 `AudioRecord.stop()` 把它
+     * 踢醒。以前是先 `join(600)`、再 stop：超时之后主线程已经去收 WAV、
+     * 发识别末包了，录音线程可能还在回调最后一块，于是最后那截声音
+     * 既没进 WAV、也没进识别队列——本地听起来就是「最后几个字断了」。
+     *
+     * 现在只有确认线程结束才释放 `AudioRecord`，回调不会再和收尾抢跑。
+     */
     fun stop() {
         if (!running) return
         running = false
-        runCatching { worker?.join(600) }
+        val rec = record
+        // 正常情况下阻塞中的 read 会在这一块（100ms）读满后返回；
+        // 给足两个块的时间，避免把最后一块音频硬切掉。
+        runCatching { worker?.join(250) }
+        if (worker?.isAlive == true) {
+            // 设备卡住时才强制打断 read，让它从阻塞里出来。
+            runCatching { rec?.stop() }
+            runCatching { worker?.join(1_000) }
+        }
         worker = null
-        record?.let {
+        rec?.let {
             runCatching { it.stop() }
             runCatching { it.release() }
         }
