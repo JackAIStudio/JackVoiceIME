@@ -21,7 +21,9 @@ object VoicePrefs {
     const val KEY_RESOURCE_ID = "voice_resource_id"
     const val KEY_BOOSTING_TABLE_ID = "voice_boosting_table_id"
     const val KEY_HOTWORDS_ENABLED = "voice_hotwords_enabled"
+    /** 旧版布尔开关，只用于迁移到 [KEY_MUTE_MODE]；新代码不再写它。 */
     const val KEY_MUTE_OTHER_AUDIO = "voice_mute_other_audio"
+    const val KEY_MUTE_MODE = "voice_mute_mode"
     const val KEY_ASR_ENGINE = "voice_asr_engine"
     const val KEY_PUNCTUATION_MODE = "voice_punctuation_mode"
     const val KEY_LAST_TAB = "voice_last_tab"
@@ -52,17 +54,31 @@ object VoicePrefs {
     fun hotwordsEnabled(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_HOTWORDS_ENABLED, true)
 
     /**
-     * 说话时按住别的 App 的音频（音乐、视频、播客）。
+     * 说话时把别的 App 的声音按住到什么程度，见 [MuteMode]。
      *
-     * 默认开启：说话时被自己的手机打断是最常见的干扰。想边听边说是少数场景，
-     * 设置页里可以关掉。
+     * 默认 [MuteMode.Silent]：焦点协商管不住直播，但系统静音适配能兜住，
+     * 而且不用动用户的音量条。只有 [MuteMode.Zero] 会改音量。
      */
-    fun muteOtherAudio(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_MUTE_OTHER_AUDIO, true)
+    fun muteMode(ctx: Context): MuteMode {
+        val p = prefs(ctx)
+        val id = p.getString(KEY_MUTE_MODE, null)
+        if (id != null) return MuteMode.fromId(id)
+        // 老用户手里只有那个布尔开关，按它换算一档；没写过就是默认。
+        return if (p.contains(KEY_MUTE_OTHER_AUDIO)) {
+            MuteMode.fromLegacy(p.getBoolean(KEY_MUTE_OTHER_AUDIO, true))
+        } else {
+            MuteMode.Default
+        }
+    }
 
-    fun setMuteOtherAudio(
+    fun setMuteMode(
         ctx: Context,
-        value: Boolean,
-    ) = prefs(ctx).edit { putBoolean(KEY_MUTE_OTHER_AUDIO, value) }
+        mode: MuteMode,
+    ) = prefs(ctx).edit {
+        putString(KEY_MUTE_MODE, mode.id)
+        // 迁移完成后旧 key 不再有意义，留着只会让它再次被读到。
+        remove(KEY_MUTE_OTHER_AUDIO)
+    }
 
     /** 当前听写引擎。默认云端；本地模型没装好时由界面回退到云端。 */
     fun engine(ctx: Context): AsrEngine =

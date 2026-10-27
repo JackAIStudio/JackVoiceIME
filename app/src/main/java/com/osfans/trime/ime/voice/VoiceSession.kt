@@ -187,6 +187,9 @@ object VoiceSession : VoiceEngine.Listener {
     fun bind(svc: TrimeInputMethodService) {
         service = svc
         VoiceEngine.setListener(this)
+        // 上一轮如果是在「音量已归零」的状态下被杀掉的，这里把音量还回去。
+        // 放在最早的位置：越早恢复，用户越不容易先碰到「手机没声音」。
+        DictationAudioMute.recoverIfStuck(svc)
         // 输入法被系统回收又重新起来时，上一轮失败的录音还在。
         // 缓存清掉，下次读 retryEntryId 会自己去历史里找（见那个 getter）。
         inMemoryRetryId = null
@@ -215,10 +218,8 @@ object VoiceSession : VoiceEngine.Listener {
             // 输入法都销毁了，没人能接结果：别让它继续占麦克风。
             VoiceEngine.cancel()
         }
-        // 同一条收尾路径：停录音、停前台服务、还音频焦点。
+        // 同一条收尾路径：停录音、停前台服务、还音频。
         finishCapture(svc)
-        // 同样别占着别人的音频。焦点虽由系统兜底回收，主动还更及时。
-        DictationAudioFocus.release()
         state = VoiceState.Idle
         lastPartial = ""
         asrDegraded = false
@@ -273,9 +274,9 @@ object VoiceSession : VoiceEngine.Listener {
             finishCapture(svc)
             return
         }
-        // 麦克风已经拿到，再按住别的 App 的音频。拿不到焦点只是背景音按不住，
-        // 不影响本轮录音。
-        DictationAudioFocus.acquire(svc) { cancel() }
+        // 麦克风已经拿到，再按住别的 App 的声音。按不住只是背景音还在响，
+        // 不影响本轮录音——直播类应用要靠音量那一层才压得住，见 [DictationAudioMute]。
+        DictationAudioMute.engage(svc) { cancel() }
         lastPartial = ""
         // 没网时这一轮照样录，只是不出字：把这件事先摆到界面上。
         asrDegraded = VoiceEngine.mode == VoiceEngine.Mode.Offline
@@ -303,7 +304,7 @@ object VoiceSession : VoiceEngine.Listener {
         notifyState()
         VoiceEngine.stopRecording()
         // 麦克风已经停，立刻把声音还给别的 App——它们没必要陪着等文字整理完。
-        DictationAudioFocus.release()
+        DictationAudioMute.release()
         // 前台服务的意义只是「让我们有资格拿麦克风」；音频已经落盘，
         // 剩下的等终稿不需要它了。早点停掉，通知栏那条也就跟着消失。
         VoiceCaptureService.stop(svc)
@@ -330,7 +331,9 @@ object VoiceSession : VoiceEngine.Listener {
      * 保证不会出现「会话已经空闲、服务还挂着」的状态。
      */
     private fun finishCapture(svc: TrimeInputMethodService?) {
-        DictationAudioFocus.release()
+        // 音量归零必须在这里恢复：这是**唯一**一条所有结束路径都经过的出口。
+        // 漏掉任何一条，用户的手机就会一直静音——比背景音吵难受得多。
+        DictationAudioMute.release()
         svc?.let { VoiceCaptureService.stop(it) }
     }
 

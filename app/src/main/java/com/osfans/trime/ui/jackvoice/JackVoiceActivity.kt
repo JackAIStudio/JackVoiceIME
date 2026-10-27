@@ -39,6 +39,7 @@ import com.osfans.trime.ime.voice.GlossarySyncClient
 import com.osfans.trime.ime.voice.GlossarySyncManager
 import com.osfans.trime.ime.voice.HotwordTableSync
 import com.osfans.trime.ime.voice.LocalModelManager
+import com.osfans.trime.ime.voice.MuteMode
 import com.osfans.trime.ime.voice.PunctuationMode
 import com.osfans.trime.ime.voice.VoiceAudio
 import com.osfans.trime.ime.voice.VoiceAudioPlayer
@@ -1383,13 +1384,11 @@ class JackVoiceActivity :
         voice.addView(
             Jv.row(
                 this,
-                "说话时暂停其他应用的声音",
-                "音乐、视频、播客会让出声音；说完自动继续播",
-                trailing = if (VoicePrefs.muteOtherAudio(this)) "开" else "关",
-            ) {
-                VoicePrefs.setMuteOtherAudio(this, !VoicePrefs.muteOtherAudio(this))
-                select(Tab.Settings)
-            },
+                "说话时按住其他应用的声音",
+                VoicePrefs.muteMode(this).hint,
+                trailing = VoicePrefs.muteMode(this).label,
+                chevron = true,
+            ) { chooseMuteMode() },
         )
         voice.addView(Jv.divider(this))
         val boostingTableId = VoicePrefs.boostingTableId(this)
@@ -1579,6 +1578,22 @@ class JackVoiceActivity :
             .setView(input)
             .setPositiveButton("保存") { _, _ ->
                 VoicePrefs.setTosSecretKey(this, input.text.toString())
+                select(Tab.Settings)
+            }.setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun chooseMuteMode() {
+        val modes = MuteMode.entries
+        AlertDialog
+            .Builder(this)
+            .setTitle("说话时按住其他应用的声音")
+            .setSingleChoiceItems(
+                modes.map { "${it.label}：${it.hint}" }.toTypedArray(),
+                VoicePrefs.muteMode(this).ordinal,
+            ) { dialog, which ->
+                VoicePrefs.setMuteMode(this, modes[which])
+                dialog.dismiss()
                 select(Tab.Settings)
             }.setNegativeButton(android.R.string.cancel, null)
             .show()

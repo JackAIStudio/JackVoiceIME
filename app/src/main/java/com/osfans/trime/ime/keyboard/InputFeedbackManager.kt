@@ -159,9 +159,13 @@ object InputFeedbackManager {
 
     /**
      * Makes a key press sound if the user has this feature enabled in the preferences.
+     *
+     * 录音期间直接不出声：那点按键音会被自己的麦克风录进去，
+     * 而且外放时还会被当成回声消掉一部分人声。振动不受影响。
      */
     fun keyPressSound(keyCode: Int = 0) {
         if (!soundOnKeyPress) return
+        if (com.osfans.trime.ime.voice.DictationAudioMute.isAudiblyMuting()) return
         if (soundEffectEnabled) {
             if (soundVolume <= 0) return
             val volume = soundVolume / 100f
