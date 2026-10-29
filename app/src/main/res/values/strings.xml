@@ -259,10 +259,14 @@
     <string name="voice_listening_offline_hint">网络没连上，这段会先存下来，停下之后可以重新识别</string>
     <string name="voice_thinking">正在整理文字…</string>
     <string name="voice_thinking_hint">录音已经存在本机，稍等一下就会上屏</string>
-    <string name="voice_stop">完成</string>
+    <string name="voice_stop">完成并复制</string>
     <string name="voice_cancel">取消</string>
     <string name="voice_channel_name">语音听写</string>
     <string name="voice_channel_desc">录音时在通知栏显示状态</string>
+    <string name="voice_copied_title">已复制到剪贴板</string>
+    <string name="voice_copied_hint">想用这段文字，去输入框长按粘贴</string>
+    <string name="voice_copied_channel_name">听写完成</string>
+    <string name="voice_copied_channel_desc">从通知栏结束听写后，提示文字已经复制好</string>
     <string name="voice_permission_title">需要麦克风权限</string>
     <string name="voice_permission_message">语音键盘要把你说的话转成文字，需要录音权限。授权后录音开关才会真正生效。</string>
     <string name="candidate_loading_more">Loading…</string>

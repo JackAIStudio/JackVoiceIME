@@ -73,8 +73,15 @@ class VoiceCaptureService : Service() {
             }
 
             ACTION_STOP -> {
-                // 挂后台听写时唯一的「说完了」入口：停录、等终稿、自动上屏。
-                if (VoiceSession.isBound) VoiceSession.stop() else VoiceEngine.stopRecording()
+                // 挂后台听写时唯一的「说完了」入口。
+                //
+                // 这里**必须标成来自通知栏**：用户没在看键盘，多半只是记一下，
+                // 终稿回来会走剪贴板而不是插进光标。录音和文字照旧进历史。
+                if (VoiceSession.isBound) {
+                    VoiceSession.stop(VoiceStopSource.Notification)
+                } else {
+                    VoiceEngine.stopRecording()
+                }
                 stopSelf()
                 return START_NOT_STICKY
             }
@@ -182,6 +189,7 @@ class VoiceCaptureService : Service() {
         }
 
         VoiceState.Thinking -> getString(R.string.voice_thinking_hint)
+
         VoiceState.Idle -> getString(R.string.voice_listening_hint)
     }
 
@@ -224,6 +232,19 @@ class VoiceCaptureService : Service() {
         const val ACTION_CANCEL = "com.osfans.trime.voice.CANCEL"
         const val ACTION_STOP = "com.osfans.trime.voice.STOP"
 
+        /**
+         * 「已复制」那条通知走**独立的 channel 和 id**。
+         *
+         * 不能复用录音那条：那条是 `setOngoing(true)` 的前台通知，用的是同一个 id，
+         * 两者会互相顶掉——要么回执把「正在聆听」挤掉，要么回执被当作业
+         * 一起摘掉，用户什么都看不到。
+         */
+        private const val COPIED_CHANNEL_ID = "jackvoice_copied"
+        private const val COPIED_NOTIFICATION_ID = 0x4A44
+
+        /** 复制回执里最多展示多少字；全文在历史页。 */
+        private const val COPIED_PREVIEW_CHARS = 80
+
         /** 文字预览最快多久刷一次通知。 */
         private const val PREVIEW_REFRESH_MS = 280L
 
@@ -249,6 +270,9 @@ class VoiceCaptureService : Service() {
             val intent = Intent(ctx, VoiceCaptureService::class.java)
             runCatching { ContextCompat.startForegroundService(ctx, intent) }
                 .onFailure { Timber.w(it, "startForegroundService 被拒") }
+            // 上一轮的「已复制」回执这时候已经没有意义了：新的一轮已经开始，
+            // 留着只会让用户以为这次也复制好了。
+            runCatching { notificationManager(ctx)?.cancel(COPIED_NOTIFICATION_ID) }
         }
 
         fun stop(ctx: Context) {
@@ -308,6 +332,74 @@ class VoiceCaptureService : Service() {
         private fun resetPreviewThrottle() {
             lastPreviewText = ""
             lastPreviewAt = 0L
+        }
+
+        /**
+         * 告诉用户「文字已经放进剪贴板了，去粘吧」。
+         *
+         * 为什么非要一条通知而不是只弹 Toast：从通知栏停的时候键盘往往收着，
+         * 输入法的 Toast 看不见；Android 12+ 还会把后台应用发的 Toast 直接吞掉。
+         * 回执没了，用户就不知道到底复制没复制，只能去历史页确认——那这个功能
+         * 等于没做。
+         *
+         * 这里**不依赖录音那条前台服务**：它这时候已经停了（终稿一到就收摊），
+         * 而回执要比它活得久一点，所以拿应用上下文自己发一条普通通知。
+         */
+        fun notifyCopied(
+            ctx: Context,
+            text: String,
+        ) {
+            runCatching {
+                val app = ctx.applicationContext
+                ensureCopiedChannel(app)
+                notificationManager(app)?.notify(COPIED_NOTIFICATION_ID, buildCopiedNotification(app, text))
+            }.onFailure { Timber.w(it, "发「已复制」通知失败") }
+        }
+
+        private fun buildCopiedNotification(
+            ctx: Context,
+            text: String,
+        ): Notification {
+            val openIntent =
+                PendingIntent.getActivity(
+                    ctx,
+                    2,
+                    Intent(ctx, com.osfans.trime.ui.jackvoice.JackVoiceActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                    PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+                )
+            val preview = VoiceNotificationText.latestSentence(text, COPIED_PREVIEW_CHARS)
+            return NotificationCompat.Builder(ctx, COPIED_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_trime_status)
+                .setContentTitle(ctx.getString(R.string.voice_copied_title))
+                .setContentText(ctx.getString(R.string.voice_copied_hint))
+                .setStyle(NotificationCompat.BigTextStyle().bigText(preview))
+                // 这条是「事办完了」的回执，不是正在进行的任务：可以划掉，也不挂着。
+                // 静默（不出声、不震动）：用户刚刚自己按的「完成」，不需要再被通知一次，
+                // 他要的是回到输入框时能看见「已经准备好了」。
+                .setContentIntent(openIntent)
+                .setAutoCancel(true)
+                .setOngoing(false)
+                .setOnlyAlertOnce(true)
+                .setSilent(true)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .build()
+        }
+
+        private fun ensureCopiedChannel(ctx: Context) {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+            val manager = ctx.getSystemService(NotificationManager::class.java) ?: return
+            if (manager.getNotificationChannel(COPIED_CHANNEL_ID) != null) return
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    COPIED_CHANNEL_ID,
+                    ctx.getString(R.string.voice_copied_channel_name),
+                    NotificationManager.IMPORTANCE_DEFAULT,
+                ).apply {
+                    description = ctx.getString(R.string.voice_copied_channel_desc)
+                    setShowBadge(false)
+                },
+            )
         }
 
         private fun notificationManager(ctx: Context): NotificationManager? = ctx.getSystemService(NotificationManager::class.java)

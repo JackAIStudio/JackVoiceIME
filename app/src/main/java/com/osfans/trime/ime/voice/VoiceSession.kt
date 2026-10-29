@@ -189,6 +189,15 @@ object VoiceSession : VoiceEngine.Listener {
     @Volatile
     private var inMemoryRetryId: String? = null
 
+    /**
+     * 这一轮是从哪儿按的停。终稿回来时按它决定插进光标还是复制到剪贴板。
+     *
+     * 必须在 [stop] 记、[onFinal] 读：点「完成」的那一瞬手上只有录音，
+     * 文字还要等几秒才回来，来源不记下来就丢了。
+     */
+    @Volatile
+    private var stopSource: VoiceStopSource = VoiceStopSource.Panel
+
     /** 已识别、但因为用户在拼写 / 键盘收起而暂未上屏的文本。 */
     private val pending = StringBuilder()
 
@@ -277,6 +286,8 @@ object VoiceSession : VoiceEngine.Listener {
         flushPending(force = true)
         // 预览卡片还开着就开始新录音：用户显然已经不要那段字了。
         preview = null
+        // 新一轮从面板开始，别继承上一轮「通知栏停的」那个意图。
+        stopSource = VoiceStopSource.Panel
 
         inMemoryRetryId = null
         micBlocked = null
@@ -323,10 +334,16 @@ object VoiceSession : VoiceEngine.Listener {
         notifyState()
     }
 
-    /** 停止录音，等服务端终稿。此时可以继续用手动键盘打字。 */
-    fun stop() {
+    /**
+     * 停止录音，等服务端终稿。此时可以继续用手动键盘打字。
+     *
+     * @param source 用户从哪儿按的停。终稿回来时按它决定插进光标还是复制到剪贴板，
+     *               **必须在这一刻记下来**：点「完成」时只有录音，文字还要等几秒。
+     */
+    fun stop(source: VoiceStopSource = VoiceStopSource.Panel) {
         val svc = service ?: return
         if (state != VoiceState.Recording) return
+        stopSource = source
         // 以引擎为准：面板显示在录，但引擎可能已经自己收场了（出错后 finishWithError
         // 已经把 isRecording 置 false）。这时 stopRecording() 会在开了守卫后直接返回，
         // 超时兜底也就挂不上，状态会永远停在 Thinking。直接收尾回空闲。
@@ -409,8 +426,10 @@ object VoiceSession : VoiceEngine.Listener {
             return
         }
         if (text.isBlank()) return
-        // 替换词和标点已经在 VoiceEngine.finish 里处理过，这里只负责上屏。
-        deliver(text)
+        // 替换词和标点已经在 VoiceEngine.finish 里处理过，这里只负责落点。
+        // 注意：**文字和音频此时已经写进历史**（VoiceEngine.archive），
+        // 下面无论插入还是复制，都不影响那条记录。
+        deliver(text, stopSource)
     }
 
     override fun onError(message: String) {
@@ -677,15 +696,23 @@ object VoiceSession : VoiceEngine.Listener {
     // ── 上屏 ────────────────────────────────────────────────────────────
 
     /**
-     * 用户点了「插入」：把预览的文字落进输入框。
+     * 重新识别的预览卡片「插入」：用户明确点了要，**一定插进光标**。
      *
-     * 走和正常终稿同一条 [deliver] 路径，所以「正在拼写时排队」那套规则一样生效。
+     * 不经过 [VoiceDelivery.resolve]：这是补救路径，用户已经亲手做了决定，
+     * 不该再按「当初从哪停的」去改他的意思。
      */
     fun commitPreview() {
         val p = preview ?: return
+        val svc = service ?: return
         preview = null
         notifyState()
-        deliver(p.text)
+        if (!svc.isVoiceTargetReady()) {
+            // 没有落点：别静默丢掉，退到剪贴板，用户自己粘。
+            copyToClipboard(svc, p.text)
+            return
+        }
+        if (svc.currentComposingText.isNotEmpty()) svc.finishComposingForVoice()
+        commit(p.text, svc)
     }
 
     /** 用户点了「丢弃」：文字已经存进历史，这里只是不插进输入框。 */
@@ -696,22 +723,60 @@ object VoiceSession : VoiceEngine.Listener {
     }
 
     /**
-     * 结果落到输入框：
-     *  - 键盘收起 / 正在拼写 → 排队，别打断用户；
-     *  - 否则直接插到光标处。
+     * 结果落到哪儿：插进光标，还是复制到剪贴板。
+     *
+     * 规则全在 [VoiceDelivery.resolve] 里，这里只负责执行。唯一的额外分支是
+     * 「用户正在拼写」——那时先排队等这一轮组合结束，别把打了一半的拼音顶掉；
+     * 这只对**面板停的**生效：还在打字说明人守在这个框边上，等他打完是对的。
+     * 从通知栏停的一律走剪贴板，不排队、也不碰他手上的组合。
+     *
+     * 两条路都**不影响历史**：文字和音频在 [VoiceEngine] 收尾时就写盘了。
      */
-    private fun deliver(text: String) {
+    private fun deliver(
+        text: String,
+        source: VoiceStopSource,
+    ) {
         val svc = service ?: return
-        if (!svc.isVoiceTargetReady() || svc.currentComposingText.isNotEmpty()) {
+        if (source == VoiceStopSource.Panel && svc.currentComposingText.isNotEmpty()) {
             val firstPending = pending.isEmpty()
             pending.append(text)
             if (firstPending) {
                 activeListeners().forEach { it.onVoiceStateChanged(state) }
-                toast("语音已识别，稍后自动插入")
+                toast("语音已识别，打完这行自动插入")
             }
             return
         }
-        commit(text, svc)
+        when (VoiceDelivery.resolve(source, svc.isVoiceTargetReady())) {
+            VoiceDelivery.Insert -> commit(text, svc)
+            VoiceDelivery.Copy -> copyToClipboard(svc, text)
+        }
+    }
+
+    /**
+     * 复制到剪贴板。
+     *
+     * 这是「没打算往哪儿插，只想记一下」的唯一出口。复制完必须给一条能看见的
+     * 反馈：输入法的 Toast 在键盘收起时常常看不见，Android 12+ 的后台 Toast
+     * 还可能被系统直接吞掉，所以另发一条普通通知（点它去历史页，取消直接划掉）。
+     *
+     * 注意剪贴板会**覆盖**用户原来的内容——这是「复制」的固有代价，不改。
+     */
+    private fun copyToClipboard(
+        svc: TrimeInputMethodService,
+        text: String,
+    ) {
+        val ok =
+            runCatching {
+                val cm = svc.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("JackVoice", text))
+            }.isSuccess
+        if (!ok) {
+            Timber.w("写剪贴板失败，${text.length} 字只留在历史里")
+            toast("没能复制，文字已存进历史记录")
+            return
+        }
+        toast("已复制到剪贴板，去粘贴")
+        runCatching { VoiceCaptureService.notifyCopied(svc, text) }
     }
 
     /**
