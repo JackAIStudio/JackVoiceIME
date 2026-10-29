@@ -1315,37 +1315,16 @@ preset_keyboards:
     - {click: "'", long_click: '"'}
     - {click: BackSpace, swipe_right: Delete, swipe_left: Escape, width: 15}
     - {click: Return, long_click: CommitComment, width: 15}
+  # 数字框用的键面：验证码、号码、日期这类 TYPE_CLASS_NUMBER 的输入框会切到这里
+  # （判定在 KeyboardWindow.onStartInput）。
+  #
+  # 以前这里是从 osfans 继承的「預設數字」：计算器式 5 列、KP_* 小键盘键码，
+  # 而且用户按 123 调不出来——验证码一弹就是一副没见过的键盘，像键盘自己变了。
+  # 现在直接指向 symbols：验证码框里看到的，就是他平时按 123 看到的那一页。
+  #
+  # 宿主只收数字时，符号键按下去会被它自己丢掉，这是 App 的职责，不是键盘的事。
   number:
-    name: 預設數字
-    author: "osfans <waxaca@163.com>"
-    width: 20
-    height: 44
-    keys:
-    - {click: '+'}
-    - {click: 'KP_1'}
-    - {click: 'KP_2'}
-    - {click: 'KP_3'}
-    - {click: '#'}
-    - {click: '-'}
-    - {click: 'KP_4'}
-    - {click: 'KP_5'}
-    - {click: 'KP_6'}
-    - {click: '%'}
-    - {click: '*'}
-    - {click: 'KP_7'}
-    - {click: 'KP_8'}
-    - {click: 'KP_9'}
-    - {click: ':'}
-    - {click: '/'}
-    - {click: '±'}
-    - {click: 'KP_0'}
-    - {click: '.'}
-    - {click: ','}
-    - {click: '='}
-    - {click: Keyboard_default, long_click: Keyboard_symbols}
-    - {click: space}
-    - {click: BackSpace}
-    - {click: Return}
+    import_preset: symbols
   # 数字/符号页 1 —— 照 Typeless 的 123 排的
   symbols:
     name: 数字与符号
