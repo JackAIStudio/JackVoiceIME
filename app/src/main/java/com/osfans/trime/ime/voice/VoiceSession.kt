@@ -132,6 +132,17 @@ object VoiceSession : VoiceEngine.Listener {
         private set
 
     /**
+     * 这一轮**拿不到麦克风**的原因；`null` 表示声音正常。
+     *
+     * 和 [asrDegraded] 并列但不同：那个是「有声音、没字」，这个是
+     * 「连声音都没有」。两者可能同时成立（没网 + 麦克风被占），
+     * 面板优先显示更致命的那条——没有声音，说什么都没用。
+     */
+    @Volatile
+    var micBlocked: MicStatus.Reason? = null
+        private set
+
+    /**
      * 重新识别出来、还没被用户确认的文字。非空时面板会盖一张预览卡片。
      *
      * 只在 [VoiceState.Idle] 有意义：录音 / 等终稿时用户已经表达了别的意图，
@@ -223,6 +234,7 @@ object VoiceSession : VoiceEngine.Listener {
         state = VoiceState.Idle
         lastPartial = ""
         asrDegraded = false
+        micBlocked = null
         asrNotice = ""
         pending.setLength(0)
         inMemoryRetryId = null
@@ -267,6 +279,20 @@ object VoiceSession : VoiceEngine.Listener {
         preview = null
 
         inMemoryRetryId = null
+        micBlocked = null
+
+        // 开录前先问一句「现在拿得到麦克风吗」。注意只拦**确定拿不到**的两种情况
+        // （没权限 / 系统总开关关了）：别的应用正在录并不等于我们录不到，
+        // 普通应用之间还看界面优先级，贸然拦下来会挡住本来能用的场景。
+        val probe = MicStatus.probeBeforeStart(svc)
+        if (probe.reason == MicStatus.Reason.PermissionDenied || probe.reason == MicStatus.Reason.MicMuted) {
+            micBlocked = probe.reason
+            state = VoiceState.Idle
+            notifyState()
+            activeListeners().forEach { it.onVoiceNotice(probe.reason!!.message) }
+            return
+        }
+
         VoiceCaptureService.start(svc)
         if (!VoiceEngine.startRecording(svc)) {
             // 麦克风没起来：前台服务也要一起收掉，否则通知栏会留下一条
@@ -281,6 +307,18 @@ object VoiceSession : VoiceEngine.Listener {
         // 没网时这一轮照样录，只是不出字：把这件事先摆到界面上。
         asrDegraded = VoiceEngine.mode == VoiceEngine.Mode.Offline
         asrNotice = if (asrDegraded) "网络没连上" else ""
+        // 别人已经在录，而且我们还没被静音：现在还能用，但值得先提醒一句。
+        if (probe.others > 0) {
+            activeListeners().forEach {
+                it.onVoiceNotice(
+                    if (probe.privacySensitive) {
+                        "有应用正在占用麦克风，可能随时被静音"
+                    } else {
+                        "有其他应用在录音"
+                    },
+                )
+            }
+        }
         state = VoiceState.Recording
         notifyState()
     }
@@ -317,6 +355,7 @@ object VoiceSession : VoiceEngine.Listener {
         state = VoiceState.Idle
         lastPartial = ""
         asrDegraded = false
+        micBlocked = null
         asrNotice = ""
         inMemoryRetryId = null
         preview = null
@@ -353,6 +392,7 @@ object VoiceSession : VoiceEngine.Listener {
         lastPartial = ""
         state = VoiceState.Idle
         asrDegraded = false
+        micBlocked = null
         asrNotice = ""
         // 终稿到达 = 这一轮结束。**必须在这里收掉前台服务**：
         // 以前只有 stop() / cancel() 会收，而引擎自己走完（终稿、出错、超时兜底）
@@ -374,6 +414,7 @@ object VoiceSession : VoiceEngine.Listener {
         lastPartial = ""
         state = VoiceState.Idle
         asrDegraded = false
+        micBlocked = null
         asrNotice = ""
         // 出错同样是「这一轮结束了」：前台服务不该比录音活得久。
         finishCapture(service)
@@ -401,6 +442,32 @@ object VoiceSession : VoiceEngine.Listener {
     }
 
     /**
+     * 麦克风拿不到，但录音还在继续。
+     *
+     * 和 [onAsrDegraded] 是同一类事——「这一轮拿不到东西，原因不在你」——
+     * 所以走同一条通道，只是原因不同。**别动状态机、别收前台服务**：
+     * 用户可能正说着，对方一松手声音就回来了。
+     */
+    override fun onMicBlocked(reason: MicStatus.Reason) {
+        micBlocked = reason
+        lastPartial = ""
+        activeListeners().forEach {
+            it.onVoicePartial("")
+            it.onVoiceStateChanged(state)
+        }
+        // 权限和总开关这两种，光在面板上打字不够——用户未必正盯着面板。
+        if (reason.pointsToIndicator || reason == MicStatus.Reason.PermissionDenied) {
+            activeListeners().forEach { it.onVoiceNotice(reason.message) }
+        }
+    }
+
+    override fun onMicRecovered() {
+        if (micBlocked == null) return
+        micBlocked = null
+        activeListeners().forEach { it.onVoiceStateChanged(state) }
+    }
+
+    /**
      * 没转出文字，但声音还在。
      *
      * 这不是「错误」，是一句还没来得及变成字的话：给一句说明，并把
@@ -413,6 +480,7 @@ object VoiceSession : VoiceEngine.Listener {
         lastPartial = ""
         state = VoiceState.Idle
         asrDegraded = false
+        micBlocked = null
         asrNotice = ""
         inMemoryRetryId = entryId
         // 同样要收掉前台服务：这一轮已经结束，只是没转出字而已。

@@ -133,6 +133,14 @@ class VoicePanelView(
 
     private var asrNotice = ""
 
+    /**
+     * 麦克风拿不到的原因；`null` 表示声音正常。
+     *
+     * 比 [asrDegraded] 更要紧：网络断了至少声音还进得来，麦克风没了就真的
+     * 说什么都白说。两者同时成立时，面板只显示这一条。
+     */
+    private var micBlocked: MicStatus.Reason? = null
+
     private val clearCenterMessage =
         Runnable {
             centerMessage = null
@@ -730,15 +738,33 @@ class VoicePanelView(
         refreshRecordingHint()
     }
 
+    /**
+     * 麦克风拿不到（被占用 / 没权限 / 系统关了）。
+     *
+     * 只改提示那一句，不动状态：录音还在跑，对方一松手声音就回来了。
+     * 传 `null` 表示恢复。
+     */
+    fun setMicBlocked(reason: MicStatus.Reason?) {
+        if (micBlocked == reason) return
+        micBlocked = reason
+        if (state != VoiceState.Recording) return
+        refreshRecordingHint()
+    }
+
     /** 录音态下方那句提示。预览气泡出现时让它先收起，气泡消失后要能回来。 */
     private fun refreshRecordingHint() {
         if (state != VoiceState.Recording) return
+        // 麦克风这条优先：没有声音的时候，说什么「先录着」都是空话。
+        val blocked = micBlocked
         hintView.text =
-            if (asrDegraded) {
-                val reason = asrNotice.ifBlank { "网络没连上" }
-                "$reason，先录着 · 再次点击完成"
-            } else {
-                "再次点击以完成"
+            when {
+                blocked != null -> blocked.short
+                asrDegraded -> {
+                    val reason = asrNotice.ifBlank { "网络没连上" }
+                    "$reason，先录着 · 再次点击完成"
+                }
+
+                else -> "再次点击以完成"
             }
         hintView.visibility =
             if (previewView.visibility == VISIBLE || trackpadActive) GONE else VISIBLE

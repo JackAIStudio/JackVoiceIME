@@ -82,6 +82,17 @@ object VoiceEngine {
          * @param message 断开的原因，已经是可以直接看的措辞
          */
         fun onAsrDegraded(message: String) {}
+
+        /**
+         * 麦克风拿不到（被别的应用占了 / 权限没了 / 系统关了）。
+         *
+         * 录音**还在继续**，只是收不到声音。界面该把「正在聆听」换成原因，
+         * 让用户知道不是自己没说、也不是软件卡了。
+         */
+        fun onMicBlocked(reason: MicStatus.Reason) {}
+
+        /** 麦克风又能收到声音了，把 [onMicBlocked] 那条提示撤掉。 */
+        fun onMicRecovered() {}
     }
 
     /** 一轮听写的来路。决定界面上该说「正在听」还是「先录着」。 */
@@ -270,6 +281,7 @@ object VoiceEngine {
 
         val rec =
             VoiceRecorder(
+                appContext = ctx.applicationContext,
                 onChunk = {
                     audio?.write(it)
                     asr?.feed(it)
@@ -278,6 +290,10 @@ object VoiceEngine {
                 // 麦克风自己坏了才是真的没法继续：这一轮到此为止。
                 onError = { finishWithError(it) },
                 onLevel = { level -> post { listener?.onLevel(level) } },
+                // 拿不到麦克风：**不掐掉这一轮**。用户可能本来就在说话，
+                // 也可能对方下一秒就松手。只把原因摆到界面上，让他自己决定继续还是停。
+                onMicBlocked = { reason -> post { listener?.onMicBlocked(reason) } },
+                onMicRecovered = { post { listener?.onMicRecovered() } },
             )
         if (!rec.start()) {
             asr?.cancel()

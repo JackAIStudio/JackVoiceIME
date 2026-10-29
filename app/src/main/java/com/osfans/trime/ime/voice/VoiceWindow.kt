@@ -163,6 +163,8 @@ class VoiceWindow(di: DI) :
         view.setState(state)
         // 这一轮是不是「只录着、还没识别」：面板上那句提示要跟着换。
         view.setAsrDegraded(VoiceSession.asrDegraded, VoiceSession.asrNotice)
+        // 连声音都收不到时，覆盖掉上面那句——说什么都没用，得先说麦克风的事。
+        view.setMicBlocked(VoiceSession.micBlocked)
         syncRetryButton()
         // 重新识别的进度与预览卡片。**顺序不能反**：
         // setRetrying(false) 会按「有没有预览」决定要不要把麦克风放回来，
