@@ -128,7 +128,17 @@ object VoiceEngine {
     private val stopped = AtomicBoolean(true)
 
     /** 本次录音开始时间，用来算听写时长（统计页要用）。 */
+    @Volatile
     private var startedAt = 0L
+
+    /**
+     * 这一轮录音的起点（墙上时间）；没在录时是 0。
+     *
+     * 通知栏的计时器直接拿它当 `setWhen()`：系统自己走秒，
+     * 不必在这里起一个 Handler 每秒 notify 一次——锁屏、息屏、下拉面板
+     * 三种情况都由系统保证对时，而且不耗电。
+     */
+    val startedAtMillis: Long get() = startedAt
 
     /** 点停止的时刻，用来区分「等到了终稿」和「超时拿一遍结果兜底」。 */
     private var stopAt = 0L

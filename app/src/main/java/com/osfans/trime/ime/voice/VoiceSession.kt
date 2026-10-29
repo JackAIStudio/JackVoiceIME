@@ -381,6 +381,9 @@ object VoiceSession : VoiceEngine.Listener {
     override fun onPartial(text: String) {
         lastPartial = text
         activeListeners().forEach { it.onVoicePartial(text) }
+        // 通知栏也摆一份实时文字。走节流入口：识别结果一秒十几条，
+        // 每条都 notify 会让通知栏一直重建、锁屏跟着闪。
+        runCatching { VoiceCaptureService.refreshPreview() }
     }
 
     override fun onLevel(level: Float) {

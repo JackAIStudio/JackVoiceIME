@@ -117,6 +117,11 @@ class VoiceCaptureService : Service() {
         titleText: String,
         hintText: String,
     ): Notification {
+        // 录音中：标题旁挂一个系统计时器。它由系统自己走秒，我们一次 notify 就够，
+        // 不用为了秒数每秒刷一次通知（那样锁屏会一直闪）。
+        val recording = VoiceSession.state == VoiceState.Recording
+        val startedAt = VoiceEngine.startedAtMillis
+        val showElapsed = recording && startedAt > 0L
         val cancelIntent =
             PendingIntent.getService(
                 this,
@@ -135,6 +140,20 @@ class VoiceCaptureService : Service() {
             .setSmallIcon(R.drawable.ic_trime_status)
             .setContentTitle(titleText)
             .setContentText(hintText)
+            // 实时文字通常一两行放不下：折叠时显示开头，下拉能看全。
+            .setStyle(NotificationCompat.BigTextStyle().bigText(hintText.ifEmpty { titleText }))
+            // 正文跟着识别结果变，但只有第一下该亮屏/响一声。
+            .setOnlyAlertOnce(true)
+            .apply {
+                if (showElapsed) {
+                    setUsesChronometer(true)
+                    setWhen(startedAt)
+                } else if (recording) {
+                    // 拿不到开始时刻时退化成静态文案，别显示一个从 1970 年跑起的秒表。
+                    setUsesChronometer(false)
+                    setShowWhen(false)
+                }
+            }
             // 点通知卡片 = 说完了（有些 ROM 不展示 action 按钮，卡片是唯一可靠的入口）。
             .setContentIntent(stopIntent)
             .setOngoing(true)
@@ -153,12 +172,14 @@ class VoiceCaptureService : Service() {
 
     private fun hint(): String = when (VoiceSession.state) {
         // 没网时这一轮只录音、不出字：通知栏也要说清，否则用户以为字还会出来。
-        VoiceState.Recording ->
-            if (VoiceSession.asrDegraded) {
-                getString(R.string.voice_listening_offline_hint)
-            } else {
-                getString(R.string.voice_listening_hint)
+        VoiceState.Recording -> {
+            val preview = VoiceNotificationText.latestSentence(VoiceSession.lastPartial)
+            when {
+                preview.isNotEmpty() -> preview
+                VoiceSession.asrDegraded -> getString(R.string.voice_listening_offline_hint)
+                else -> getString(R.string.voice_listening_hint)
             }
+        }
 
         VoiceState.Thinking -> getString(R.string.voice_thinking_hint)
         VoiceState.Idle -> getString(R.string.voice_listening_hint)
@@ -203,6 +224,16 @@ class VoiceCaptureService : Service() {
         const val ACTION_CANCEL = "com.osfans.trime.voice.CANCEL"
         const val ACTION_STOP = "com.osfans.trime.voice.STOP"
 
+        /** 文字预览最快多久刷一次通知。 */
+        private const val PREVIEW_REFRESH_MS = 280L
+
+        /** 上一次写进通知的那句预览，用来挡掉重复内容。 */
+        @Volatile
+        private var lastPreviewText = ""
+
+        @Volatile
+        private var lastPreviewAt = 0L
+
         /**
          * 活着的那一个服务实例。
          *
@@ -234,6 +265,8 @@ class VoiceCaptureService : Service() {
             }
             runCatching { notificationManager(ctx)?.cancel(NOTIFICATION_ID) }
             runCatching { ctx.stopService(Intent(ctx, VoiceCaptureService::class.java)) }
+            // 这条通知已经不在了，下一轮预览从空白开始重新判断要不要刷。
+            resetPreviewThrottle()
         }
 
         /**
@@ -251,6 +284,30 @@ class VoiceCaptureService : Service() {
             runCatching {
                 notificationManager(svc)?.notify(NOTIFICATION_ID, svc.buildNotification(svc.title(), svc.hint()))
             }
+        }
+
+        /**
+         * 流式结果到了：内容变了才刷，并且最多每 [PREVIEW_REFRESH_MS] 一次。
+         *
+         * 识别结果几十毫秒来一条，每条都 notify 会让通知栏不停重建、锁屏跟着闪，
+         * 也白白耗电。文字预览只是「顺带看一眼」的东西，跟不上半个字无所谓；
+         * 状态变化（开始/停止/出错）仍然走 [refresh] 立即生效。
+         */
+        fun refreshPreview() {
+            val svc = running ?: return
+            val preview = VoiceNotificationText.latestSentence(VoiceSession.lastPartial)
+            val now = android.os.SystemClock.elapsedRealtime()
+            if (preview == lastPreviewText) return
+            if (now - lastPreviewAt < PREVIEW_REFRESH_MS) return
+            lastPreviewText = preview
+            lastPreviewAt = now
+            refresh()
+        }
+
+        /** 关掉通知时把节流状态一起清掉，下一轮从头开始。 */
+        private fun resetPreviewThrottle() {
+            lastPreviewText = ""
+            lastPreviewAt = 0L
         }
 
         private fun notificationManager(ctx: Context): NotificationManager? = ctx.getSystemService(NotificationManager::class.java)
