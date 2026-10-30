@@ -334,8 +334,23 @@ object VoiceEngine {
             localAsr?.cancel()
             asr = null
             localAsr = null
-            // 麦克风没起来，这条等于什么都没录到：别在历史里留空壳。
-            discardCurrentEntry(ctx)
+            // 麦克风根本没起来，这段确实一个字节都没有。
+            // 但**别让它悄无声息地消失**：用户点了「说话」，得知道这句话没进去。
+            // 留一条记录说明原因，历史页能看见，比「点了没反应」强。
+            entryId
+                .takeIf { it.isNotEmpty() }
+                ?.let { id ->
+                    runCatching {
+                        VoiceHistory.markFailed(
+                            ctx,
+                            id,
+                            VoiceHistory.Status.Failed,
+                            "麦克风没起来，这段话没录上",
+                        )
+                    }
+                    failedEntryId = id
+                }
+            entryId = ""
             post { listener?.onError("麦克风启动失败") }
             return false
         }
@@ -429,25 +444,39 @@ object VoiceEngine {
         post { listener?.onLevel(0f) }
     }
 
-    /** 直接丢弃，不上屏。**这是唯一会连音频一起删掉的路径**：用户明确说不要了。 */
-    fun cancel() {
-        isRecording = false
-        isWaitingFinal = false
-        stopped.set(true)
-        recorder?.stop()
-        recorder = null
-        runCatching { audio?.abort() }
-        audio = null
-        stoppedArtifact = null
-        asr?.cancel()
-        asr = null
-        localAsr?.cancel()
-        localAsr = null
-        result.setLength(0)
-        main.removeCallbacksAndMessages(null)
-        discardCurrentEntry(appContext)
-        post { listener?.onLevel(0f) }
+    /**
+     * 立刻收手，**绝不删除音频**。
+     *
+     * 以前这里叫 `cancel()`：`audio.abort()` 删掉写了一半的 WAV、
+     * `discardCurrentEntry()` 删掉记录。可它的调用点里**没有一个是用户说了「不要」**——
+     * 音频焦点被来电抢走、输入法服务被系统回收、界面状态残留自愈，全都走的这一条。
+     * 结果是用户话说到一半被打断，那段声音永久消失，连重新识别的机会都没有。
+     *
+     * 现在一律走 [finish]：有字就上屏，没字就把音频安置成可重试。
+     * 真正一个字节都没录到的时候，[archive] 会留一条失败记录说明原因——
+     * 用户至少知道自己这一轮没留住，而不是什么都没发生。
+     *
+     * **音频只会在一个地方消失**：用户在历史页手动点「删除」。
+     * 录音一旦开始，声音就是用户自己的东西，程序没有资格替他决定不要。
+     */
+    fun finishNow() {
+        if (!isCapturing()) return
+        // 还在录：先按正常路径停下来（收 WAV、发末包），再立刻交卷。
+        if (isRecording) stopRecording()
+        // stopRecording 可能已经因为「根本没有识别连接」自己收过尾了；
+        // finish 里的 stopped 守卫会把重复调用挡掉。
+        if (!stopped.get()) finish(fromTimeout = true)
     }
+
+    /**
+     * 这一轮已经说了多少字（流式一遍结果的长度）。
+     *
+     * 界面在「正在整理文字」时用它给个进度感：数字在动，用户就不觉得卡死。
+     */
+    val partialLength: Int get() = result.length
+
+    /** 有没有一轮正在进行（录音或等终稿）。 */
+    fun isCapturing(): Boolean = isRecording || isWaitingFinal
 
     /**
      * 唯一出口。上屏文本可能是服务端终稿，也可能是 3 秒超时后用一遍结果兜底——
@@ -578,19 +607,22 @@ object VoiceEngine {
                 }
 
                 else -> {
-                    // 连一个字节的音频都没存下，也没识别出东西：这条没有留存价值。
-                    VoiceHistory.discard(appContext, id)
+                    // 一个字节的音频都没存下、也没识别出东西。
+                    //
+                    // 以前这里直接 `discard`：连记录一起删。可「没存下」和
+                    // 「本来就没有」是两件事——写盘失败时文件可能还在，
+                    // 而用户此刻最需要的是**知道这一轮没留住**，不是悄无声息地回到空闲。
+                    // 现在留一条失败记录，写明原因，让他知道该重说一遍。
+                    VoiceHistory.markFailed(
+                        appContext,
+                        id,
+                        VoiceHistory.Status.Failed,
+                        if (error != null) VoiceFailure.describe(error) else "录音没能保存，这段没留住",
+                    )
+                    failedEntryId = id
                 }
             }
         }.onFailure { Timber.w(it, "写入听写记录失败") }
-    }
-
-    /** 丢掉的条目：取消录音、麦克风起不来。 */
-    private fun discardCurrentEntry(ctx: Context) {
-        val id = entryId
-        entryId = ""
-        if (id.isEmpty()) return
-        runCatching { VoiceHistory.discard(ctx, id) }
     }
 
     /**

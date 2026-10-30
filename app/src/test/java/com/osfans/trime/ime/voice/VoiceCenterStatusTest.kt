@@ -24,6 +24,7 @@ class VoiceCenterStatusTest :
             retryProgress: Float = 0f,
             trackpadActive: Boolean = false,
             message: String? = null,
+            partialChars: Int = 0,
         ) = VoiceCenterStatus.resolve(
             state = state,
             previewVisible = previewVisible,
@@ -31,6 +32,7 @@ class VoiceCenterStatusTest :
             retryProgress = retryProgress,
             trackpadActive = trackpadActive,
             message = message,
+            partialChars = partialChars,
         )
 
         Given("空闲且没有任何任务") {
@@ -74,9 +76,32 @@ class VoiceCenterStatusTest :
         }
 
         Given("录音中或等终稿") {
-            Then("中央状态文字一律不显示") {
+            Then("录音中中央不显示文字（波形和实时气泡才是主角）") {
                 resolve(state = VoiceState.Recording) shouldBe null
-                resolve(state = VoiceState.Thinking, message = "处理中") shouldBe null
+            }
+
+            Then("**等终稿必须有一句话**：以前这里也返回 null，屏幕上只剩一颗转圈的胶囊") {
+                resolve(state = VoiceState.Thinking, message = "处理中") shouldBe "正在整理文字…"
+            }
+
+            Then("已经有流式结果时把字数带出去，用户才知道它在干活") {
+                resolve(state = VoiceState.Thinking, partialChars = 23) shouldBe
+                    "正在整理文字… 已收下 23 字"
+            }
+
+            Then("临时提示不能盖掉等终稿那句话") {
+                resolve(state = VoiceState.Thinking, message = "已切到本地识别", partialChars = 5) shouldBe
+                    "正在整理文字… 已收下 5 字"
+            }
+        }
+
+        Given("等终稿时胶囊下面那行说明") {
+            Then("有字就说「用这 N 字」，用户才敢按") {
+                VoiceCenterStatus.thinkingHint(23) shouldBe "再点一下，就用这 23 字"
+            }
+
+            Then("还没字就只说「不等了」") {
+                VoiceCenterStatus.thinkingHint(0) shouldBe "再点一下就不等了"
             }
         }
 

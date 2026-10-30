@@ -253,18 +253,11 @@ object VoiceHistory {
         }
     }
 
-    /** 点「取消」：这条确实不要了，连音频一起删。 */
-    @Synchronized
-    fun discard(
-        ctx: Context,
-        id: String,
-    ) {
-        ensureLoaded(ctx)
-        val entry = cache.firstOrNull { it.id == id } ?: return
-        entry.fileName?.let { VoiceAudio.delete(ctx, it) }
-        cache.remove(entry)
-        persist(ctx)
-    }
+    // discard() 在这里被删掉了：它删记录也删音频，而调用它的是引擎的 cancel()。
+    //
+    // 现在中途结束一律走 finish()——没转出字就把音频标成可重试，用户能在历史页
+    // 看到它、能点重新识别。删除只剩下 delete() 一个入口，由历史页那条
+    // 「删除」按钮直接触发，是用户自己的动作。
 
     @Synchronized
     fun delete(
@@ -354,11 +347,38 @@ object VoiceHistory {
                 // 音频还在、错误是网络类 → NoNetwork，按钮就重新出现。
                 // 只动确实能判定的（错误串明确是网络类），其余原样保留。
                 val status =
-                    if (stored == Status.Empty && error.isNotBlank() && VoiceFailure.isNetwork(error)) {
-                        repaired = true
-                        Status.NoNetwork
+                    when {
+                        // 被误判成 Empty、其实是网络问题：改回 NoNetwork，按钮重新出现。
+                        stored == Status.Empty && error.isNotBlank() && VoiceFailure.isNetwork(error) -> {
+                            repaired = true
+                            Status.NoNetwork
+                        }
+
+                        // **进程被杀留下的僵尸记录。**
+                        //
+                        // 录音一开始就 begin() 建了一条 Recording，那时还没有文件名；
+                        // 而 attachAudio 要等停下时才挂。于是进程中途被杀，磁盘上就留下
+                        // 一条「Recording + 没有音频」的条目：canRetry 明确排除 Recording，
+                        // 它永远没有重试按钮，历史页永远写着「上次听写被中断了」，
+                        // 可那段音频其实已经被 recoverInterrupted 救回来了、
+                        // 甚至已经补成了另一条新记录。
+                        //
+                        // 这里把它收殓成 Failed：说明原因，至少不再是永远进行中。
+                        // 有同名音频的那种另说——那说明记录本身是好的，只是没走完状态流转。
+                        stored == Status.Recording -> {
+                            repaired = true
+                            Status.Failed
+                        }
+
+                        else -> {
+                            stored
+                        }
+                    }
+                val finalError =
+                    if (stored == Status.Recording && error.isBlank()) {
+                        "上次听写被中断"
                     } else {
-                        stored
+                        error
                     }
                 cache.add(
                     Entry(
@@ -369,14 +389,14 @@ object VoiceHistory {
                         fileName = o.optString("audio").takeIf { it.isNotBlank() },
                         // 老记录没有这两个字段：那时只有成功上屏的才会进历史。
                         status = status,
-                        error = error,
+                        error = finalError,
                         retryCount = o.optInt("retry"),
                     ),
                 )
             }
         }.onFailure { Timber.w(it, "读取听写历史失败") }
         if (repaired) {
-            Timber.i("修正了被误判为「没听到人声」的历史记录")
+            Timber.i("修正了历史记录里不可重试的状态（误判的 Empty / 中断的 Recording）")
             persist(ctx)
         }
     }

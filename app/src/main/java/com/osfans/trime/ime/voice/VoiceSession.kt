@@ -287,8 +287,14 @@ object VoiceSession : VoiceEngine.Listener {
         service = null
         VoiceEngine.setListener(null)
         if (VoiceEngine.isRecording || VoiceEngine.isWaitingFinal) {
-            // 输入法都销毁了，没人能接结果：别让它继续占麦克风。
-            VoiceEngine.cancel()
+            // 输入法服务销毁了，但**这一轮的声音还得留住**。
+            //
+            // 以前这里调 VoiceEngine.cancel()：abort() 删掉写了一半的 WAV，
+            // 连「进程被杀还能救回来」的那层兜底都绕过了——切换输入法、
+            // 系统回收输入法，用户刚说的话就这么没了。
+            // 现在走 finishNow()：收 WAV、有字就落历史，界面上没人接也无所谓，
+            // 文字会留在记录里，用户回历史页能看见、能重新识别。
+            VoiceEngine.finishNow()
         }
         // 同一条收尾路径：停录音、停前台服务、还音频。
         finishCapture(svc)
@@ -424,7 +430,12 @@ object VoiceSession : VoiceEngine.Listener {
         }
         // 麦克风已经拿到，再按住别的 App 的声音。按不住只是背景音还在响，
         // 不影响本轮录音——直播类应用要靠音量那一层才压得住，见 [DictationAudioMute]。
-        DictationAudioMute.engage(svc) { cancel() }
+        //
+        // 焦点被系统收回（来电、闹钟、别的应用抢）时回调这里。**必须走 stop()**：
+        // 以前的写法是 cancel()，也就是「把刚说的话删掉」——用户正在说话被一通电话
+        // 打断，回来发现这一整段没了，连重新识别的机会都没有。电话挂断不是用户的错，
+        // 那段声音该留。
+        DictationAudioMute.engage(svc) { stop(source = VoiceStopSource.Panel) }
         lastPartial = ""
         // 没网时这一轮照样录，只是不出字：把这件事先摆到界面上。
         asrDegraded = VoiceEngine.mode == VoiceEngine.Mode.Offline
@@ -464,7 +475,8 @@ object VoiceSession : VoiceEngine.Listener {
             // 引擎要真在录就把它停掉，然后把状态摆正——否则用户再点通知，
             // 会一直落到「停止」分支，永远开不了新的一轮（实测踩过）。
             Timber.w("停止请求没有上下文，按脏状态处理")
-            VoiceEngine.cancel()
+            // 同样是「收手但保住声音」：这里甚至可能还有一段正在写的 WAV。
+            VoiceEngine.finishNow()
             state = VoiceState.Idle
             lastPartial = ""
             notifyState()
@@ -474,7 +486,9 @@ object VoiceSession : VoiceEngine.Listener {
         // 已经把 isRecording 置 false）。这时 stopRecording() 会在开了守卫后直接返回，
         // 超时兜底也就挂不上，状态会永远停在 Thinking。直接收尾回空闲。
         if (!VoiceEngine.isRecording) {
-            VoiceEngine.cancel()
+            // **不能删音频**：引擎刚收完场，那段 WAV 可能已经落盘、只是还没上屏。
+            // 这里只要把界面摆正，音频交给 finishNow 走正常归档。
+            VoiceEngine.finishNow()
             finishCapture(ctx)
             state = VoiceState.Idle
             lastPartial = ""
@@ -491,24 +505,33 @@ object VoiceSession : VoiceEngine.Listener {
         VoiceCaptureService.stop(ctx)
     }
 
-    /** 直接丢弃这一轮（通知栏「取消」/ 输入法销毁）。 */
-    fun cancel() {
-        VoiceEngine.cancel()
-        // 还没开录就被取消（例如服务没起来）：pending 状态必须一起清掉。
+    /**
+     * 立刻收手：**已经有结果就上屏，没有就把音频留成可重试**。
+     *
+     * 这是「结束一轮」的唯一出口——来电抢走音频焦点、输入法服务被系统回收、
+     * 界面状态残留自愈、用户在等待中嫌慢点了麦克风。这些场景里用户从没说过
+     * 「这段不要了」，所以**一个字节都不许删**。
+     *
+     * 这个类里不再有「丢弃」的入口：音频只会在用户于历史页手动点删除时消失。
+     * 曾经有过一个 abandon()（长按麦克风），后来也删掉了——录音开始之后，
+     * 该不该留这段声音不该由一个手势来回答。
+     */
+    fun finishNow() {
+        val ctx = service ?: captureHost
+        // 先让引擎交卷：它会走 finish() → archive()，把音频安置好、
+        // 有字就把文字回调过来（onFinal 里会再走一次 finishCapture）。
+        VoiceEngine.finishNow()
         pendingStart = null
         pendingProbe = null
-        finishCapture(service ?: captureHost)
-        state = VoiceState.Idle
-        lastPartial = ""
-        asrDegraded = false
-        micBlocked = null
-        asrNotice = ""
-        inMemoryRetryId = null
-        preview = null
-        disarmRetryWatchdog()
-        retryingEntryId = null
-        pending.setLength(0)
-        notifyState()
+        // 引擎没在收尾（本来就已经空闲 / 还没开录）：这里兜底把界面摆正。
+        // 引擎真的在收尾时，onFinal / onRetryable 会把状态收干净；
+        // 但界面不能等它——用户点了一下，屏幕必须立刻有反应。
+        if (state != VoiceState.Idle) {
+            state = VoiceState.Idle
+            lastPartial = ""
+            notifyState()
+        }
+        finishCapture(ctx)
     }
 
     /**

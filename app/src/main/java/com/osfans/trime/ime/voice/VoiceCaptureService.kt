@@ -65,15 +65,6 @@ class VoiceCaptureService : Service() {
         startId: Int,
     ): Int {
         when (intent?.action) {
-            ACTION_CANCEL -> {
-                // 走会话而不是直接掐引擎：面板/顶栏的状态要跟着回到空闲。
-                // **不看 isBound**：从通知栏起的那一轮键盘可能没展开、输入法服务不存在，
-                // 但会话照样在（它自己记着这一轮的上下文），照样要能取消。
-                VoiceSession.cancel()
-                stopSelf()
-                return START_NOT_STICKY
-            }
-
             ACTION_STOP -> {
                 // 挂后台听写时唯一的「说完了」入口。
                 //
@@ -83,6 +74,10 @@ class VoiceCaptureService : Service() {
                 // 同理**不看 isBound**：没有输入法服务时 VoiceSession 用这一轮记下的
                 // 应用上下文收尾。以前这里退到 `VoiceEngine.stopRecording()`，
                 // 而那条路没有会话监听者——终稿回来没人接，文字就只剩历史里那一条。
+                //
+                // 这里以前还有一条 ACTION_CANCEL 分支，走 VoiceSession.cancel()——
+                // 删音频、删记录。通知栏上不该出现一个会把刚说的话扔掉的动作：
+                // 用户按录音是想拿到字，不是想让系统帮忙毁掉素材。
                 VoiceSession.stop(VoiceStopSource.Notification)
                 stopSelf()
                 return START_NOT_STICKY
@@ -143,13 +138,6 @@ class VoiceCaptureService : Service() {
         val recording = VoiceSession.state == VoiceState.Recording
         val startedAt = VoiceEngine.startedAtMillis
         val showElapsed = recording && startedAt > 0L
-        val cancelIntent =
-            PendingIntent.getService(
-                this,
-                0,
-                Intent(this, VoiceCaptureService::class.java).setAction(ACTION_CANCEL),
-                PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
-            )
         val stopIntent =
             PendingIntent.getService(
                 this,
@@ -180,8 +168,13 @@ class VoiceCaptureService : Service() {
             .setOngoing(true)
             .setSilent(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
+            // 只留「完成」一颗。
+            //
+            // 以前这里还有一颗「取消」，点下去会把刚录的音频连同记录一起删掉。
+            // 那个按钮解决的是一个不存在的需求：用户按下录音是为了拿到字，
+            // 不是为了让系统帮忙毁掉素材。真说错了重说一遍就行，成本远低于
+            // 「手滑点错、刚才那段话没了」。音频的留存不需要用户来担保。
             .addAction(R.drawable.ic_trime_status, getString(R.string.voice_stop), stopIntent)
-            .addAction(R.drawable.ic_trime_status, getString(R.string.voice_cancel), cancelIntent)
             .build()
     }
 
@@ -243,7 +236,6 @@ class VoiceCaptureService : Service() {
     companion object {
         private const val CHANNEL_ID = "jackvoice_recording"
         private const val NOTIFICATION_ID = 0x4A43 // "JC"
-        const val ACTION_CANCEL = "com.osfans.trime.voice.CANCEL"
         const val ACTION_STOP = "com.osfans.trime.voice.STOP"
 
         /**

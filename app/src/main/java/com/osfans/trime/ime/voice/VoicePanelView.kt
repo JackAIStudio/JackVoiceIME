@@ -612,9 +612,12 @@ class VoicePanelView(
 
             VoiceState.Thinking -> {
                 retryView.visibility = GONE
-                hintView.visibility = GONE
+                // 等终稿时**要留一行说明**：以前这里 hintView 是 GONE，
+                // 整块屏幕只剩一颗转圈的胶囊，用户没有任何判断依据。
+                hintView.visibility = VISIBLE
                 bottomBar.visibility = GONE
                 orb.level = 0f
+                refreshThinkingHint()
             }
         }
         // 中央提示只有一个出口：状态、重识别、临时提示、触控板都汇到这里。
@@ -719,9 +722,14 @@ class VoicePanelView(
                 retryProgress = retryingProgress,
                 trackpadActive = trackpadActive,
                 message = centerMessage,
+                // 等终稿时把「已经收下多少字」带出去：数字在动，
+                // 用户就知道它在干活，而不是卡死了。
+                partialChars = if (state == VoiceState.Thinking) VoiceEngine.partialLength else 0,
             )
         statusView.text = text.orEmpty()
         statusView.visibility = if (text == null) GONE else VISIBLE
+        // 胶囊下面那行也跟着刷新（它同样依赖字数）。
+        if (state == VoiceState.Thinking) refreshThinkingHint()
     }
 
     /**
@@ -771,6 +779,18 @@ class VoicePanelView(
     }
 
     /**
+     * 等终稿时下方那句提示：告诉用户**点下去不会丢东西**。
+     *
+     * 点胶囊＝用手上这版收尾，音频照样落库。这句话不写清楚，
+     * 用户宁愿干等也不敢按——那这颗按钮等于不存在。
+     */
+    private fun refreshThinkingHint() {
+        if (state != VoiceState.Thinking) return
+        hintView.text = VoiceCenterStatus.thinkingHint(VoiceEngine.partialLength)
+        hintView.visibility = VISIBLE
+    }
+
+    /**
      * 麦克风那块的 **View 边界** 跟着画出来的形状走。
      *
      * 画布一直是 160dp 见方（录音圆 + 光晕要那么大），但空闲时只画一颗 56dp 高的胶囊。
@@ -810,6 +830,13 @@ class VoicePanelView(
         // 就在它正上方，同时显示会挤在一起。预览清空后提示要自己回来，
         // 不能像以前那样一收就永远不显示。
         refreshRecordingHint()
+        // 等终稿时也走这里：引擎最后一遍流式结果到得比终稿早，
+        // 中央的「已收下 N 字」得跟着它走，不然数字会停在打开面板那一刻。
+        if (state == VoiceState.Thinking) {
+            // 气泡在等终稿时没有意义（话说完了），只留中央那行字。
+            previewView.visibility = GONE
+            renderCenterStatus()
+        }
     }
 
     private fun clearPreview() {
