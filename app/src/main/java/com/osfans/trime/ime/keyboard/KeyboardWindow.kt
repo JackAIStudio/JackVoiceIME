@@ -9,6 +9,7 @@ import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.text.InputType
 import android.view.Gravity
+import android.view.KeyEvent
 import android.view.View
 import android.view.WindowInsets
 import android.view.inputmethod.EditorInfo
@@ -30,6 +31,11 @@ import com.osfans.trime.data.theme.model.TextKeyboard
 import com.osfans.trime.ime.broadcast.EnterKeyDisplayDelegate
 import com.osfans.trime.ime.broadcast.InputBroadcastReceiver
 import com.osfans.trime.ime.core.TrimeInputMethodService
+import com.osfans.trime.ime.emoji.EmojiIndex
+import com.osfans.trime.ime.emoji.EmojiMode
+import com.osfans.trime.ime.emoji.EmojiQuery
+import com.osfans.trime.ime.emoji.EmojiUsage
+import com.osfans.trime.ime.emoji.EmojiVariantPopup
 import com.osfans.trime.ime.keyboard.KeyboardPrefs.isLandscapeMode
 import com.osfans.trime.ime.popup.PopupDelegate
 import com.osfans.trime.ime.voice.CandidatePages
@@ -107,7 +113,29 @@ class KeyboardWindow(di: DI) :
 
     /** 当前候选条是英文补全给的（不是 Rime 的中文候选）。 */
     private var englishMode = false
+
+    /**
+     * Emoji 模式：候选行换成 emoji 来源，键盘与语言都不动。
+     *
+     * 和 [englishMode] 是同一条通路上的两个来源，都绕开 Rime 自己出候选。
+     */
+    private val emojiMode = EmojiMode(rime)
+
+    /** 长按 emoji 时弹出肤色 / 性别变体。浮在候选条上方，所以是独立窗口。 */
+    private val emojiVariants by lazy { EmojiVariantPopup(context) }
+
     private var candidatesExpanded = false
+
+    /** [candidatePanel] 现在是不是 emoji 网格（9 列）。列数变了就得重建，见 [toggleCandidatePanel]。 */
+    private var panelIsEmojiGrid = false
+
+    /**
+     * 面板当前显示的那一份数据。
+     *
+     * 中文/英文候选就是 [lastCandidates]（和候选条同一份，index 通用）；
+     * emoji 展开时会换成更长的列表，此时**只能**按这一份去解析下标。
+     */
+    private var panelSource: Array<CandidateProto>? = null
 
     /** 展开面板的分页游标：Rime 一次只给 16 条，再往后得自己按全局下标要。 */
     private val candidatePages = CandidatePages()
@@ -142,6 +170,9 @@ class KeyboardWindow(di: DI) :
 
         /** 按键区左右留白，Typeless 的键不贴着屏幕边。 */
         private const val KEY_SIDE_PADDING_DP = 6
+
+        /** 展开面板里最多给多少个 emoji。1906 个一次全塞进去会明显卡顿，500 够滑很久了。 */
+        private const val PANEL_EMOJI_LIMIT = 500
     }
 
     override val key: ResidentWindow.Key
@@ -220,22 +251,15 @@ class KeyboardWindow(di: DI) :
                 bar.onVoiceFromComposing = { boardWindowManager.attachWindow(voiceWindow) }
                 // 候选行里的「拼/EN」：英文候选常驻，没有这一格就切不回中文。
                 bar.onLanguageSwitchTap = { switchLanguage() }
+                // 长按 emoji 弹肤色 / 性别变体。中文候选没有变体，这里直接不响应。
+                bar.onCandidateLongPick = { index, anchor -> showEmojiVariants(index, anchor) }
+                // 候选行那颗 ✕：一次清掉 emoji 搜索词（只清搜索词，不动输入框里的正文）
+                bar.onClearQuery = { clearEmojiQuery() }
             }
 
         attachKeyboard(evalKeyboard(".default"))
 
-        candidatePanel =
-            CandidatePanelView(context).apply {
-                visibility = View.GONE
-                // 展开面板里的英文候选也归英文补全处理，不能送去 Rime 选——
-                // 那里的下标对不上，点了等于没点。
-                onPick = { index ->
-                    collapseCandidatePanel()
-                    pickCandidate(index)
-                }
-                // 滑到底：Rime 的 bulk 候选只有 16 条，后面的得一批批要。
-                onLoadMore = { requestMoreCandidates() }
-            }
+        candidatePanel = buildCandidatePanel(emojiGrid = false)
 
         // 按键区：左右各留 6dp（Typeless 的键不贴屏幕边），整页候选面板叠在上面
         keyArea =
@@ -253,7 +277,10 @@ class KeyboardWindow(di: DI) :
             candidatePanel,
             FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
-                FrameLayout.LayoutParams.MATCH_PARENT,
+                // 高度**必须**显式给按键区的高度，不能用 MATCH_PARENT：
+                // keyArea 自己没有固定高度，面板 MATCH_PARENT 会反过来把 keyArea
+                // 撑到整屏，盖住底部手势条（实测会把导航栏压掉）。
+                currentKeyboardHeightPx(),
             ),
         )
 
@@ -330,6 +357,10 @@ class KeyboardWindow(di: DI) :
     }
 
     /** 键盘高度报给外面时要带上顶栏、缝和底部让位，否则 InputView 会少给这一截。 */
+    /** 当前键面的按键区高度（px）。面板要盖住按键区，用的就是它。 */
+    private fun currentKeyboardHeightPx(): Int =
+        activeKeyboard?.keyboardHeight ?: context.dp(theme.style.keyboardHeight)
+
     private fun reportHeight(keysHeight: Int) {
         val chrome =
             toolbarTopMarginPx +
@@ -337,6 +368,39 @@ class KeyboardWindow(di: DI) :
                 context.dp(TOOLBAR_GAP_DP) +
                 context.dp(BOTTOM_GAP_DP)
         runBlocking { _currentKeyboardHeight.emit(keysHeight + chrome) }
+    }
+
+    /**
+     * 造一个展开候选面板。
+     *
+     * 中文/英文候选是 3 列 × 50dp（字给眼睛读，一行放三个刚好），
+     * emoji 是 9 列 × 44dp（图形要密，一屏才看得下足够多）。
+     *
+     * 两种网格的列数不同，没法共用一个已经 addView 过的实例，所以切换模式时
+     * 整个换掉——面板只在展开那一刻存在，重建不丢状态。
+     */
+    private fun buildCandidatePanel(emojiGrid: Boolean): CandidatePanelView = CandidatePanelView(
+        context,
+        perRow = if (emojiGrid) CandidatePanelView.EMOJI_PER_ROW else CandidatePanelView.DEFAULT_PER_ROW,
+        rowHeightDp = if (emojiGrid) CandidatePanelView.EMOJI_ROW_HEIGHT_DP else CandidatePanelView.DEFAULT_ROW_HEIGHT_DP,
+    ).apply {
+        visibility = View.GONE
+        // 展开面板里的候选和候选条走同一个 pickCandidate：
+        // 英文归词表提交、emoji 归替换、中文交给 Rime。这里的 index 一律是**全量下标**。
+        onPick = { index ->
+            // emoji 面板的列表和候选条不是同一份（展开时会给更多），
+            // 所以拿 index 去查 lastCandidates 会点错。按「面板里点到的那个」提交。
+            val picked = panelSource?.getOrNull(index)?.text
+            collapseCandidatePanel()
+            if (emojiMode.enabled && picked != null) {
+                pickEmoji(picked)
+            } else {
+                pickCandidate(index)
+            }
+        }
+        // 中文：Rime 的 bulk 候选只有 16 条，后面的得一批批要。
+        // emoji：本地列表已经全在内存里，不需要分批（见 requestMoreCandidates）。
+        onLoadMore = { requestMoreCandidates() }
     }
 
     private fun setTrackpadActive(active: Boolean) {
@@ -447,6 +511,16 @@ class KeyboardWindow(di: DI) :
             }
 
             currentKeyboard = it
+            // 面板要盖住按键区：换键面后高度可能变了（横屏 200dp / 竖屏 236dp），
+            // 不跟着改的话面板会比按键区高或矮一截。
+            if (::candidatePanel.isInitialized && candidatePanel.layoutParams != null) {
+                (candidatePanel.layoutParams as? FrameLayout.LayoutParams)?.height =
+                    currentKeyboardHeightPx()
+            }
+            // 换键面（字母 → 123 → 回来）时把那颗表情键的亮灭重新落一遍：
+            // 每张布局是各自的 Key 实例，状态不会跟着走。这里直接用刚挂上的
+            // keyboard，不走 activeKeyboard——缓存里可能还是旧的。
+            applyEmojiKeyState(it)
         }
 
         view.let {
@@ -559,6 +633,10 @@ class KeyboardWindow(di: DI) :
     }
 
     override fun onStartInput(info: EditorInfo) {
+        // 换输入框时退出 emoji 模式：新输入框有它自己的语言与布局，带着一个
+        // 半截的 emoji 搜索词过去没有意义。
+        if (emojiMode.enabled) exitEmojiMode()
+
         // 英文候选是词表给的，Rime 重新聚焦时不会自己冒候选；如果当前已经是英文模式，
         // 别把顶栏收成品牌——等 updateEnglishSuggestions 刷新，否则切键盘时顶栏会闪一下。
         if (!rime.run { statusCached }.isAsciiMode) {
@@ -647,11 +725,14 @@ class KeyboardWindow(di: DI) :
 
     /** 点候选：英文补全按词表提交，中文交给 Rime。候选条与展开面板共用这一条。 */
     private fun pickCandidate(index: Int) {
-        val picked = lastCandidates.getOrNull(index)?.text
-        if (englishMode && picked != null) {
-            service.commitEnglishSuggestion(picked)
-        } else {
-            rime.launchOnReady { it.selectCandidate(index, global = true) }
+        val picked = lastCandidates.getOrNull(index)?.text ?: return
+        when {
+            // emoji 候选不走 Rime，也不走英文那条「删词干提交整词」——它替换的是搜索时打的那串字母
+            emojiMode.enabled -> pickEmoji(picked)
+
+            englishMode -> service.commitEnglishSuggestion(picked)
+
+            else -> rime.launchOnReady { it.selectCandidate(index, global = true) }
         }
     }
 
@@ -677,6 +758,7 @@ class KeyboardWindow(di: DI) :
     /** 英文候选：词表补全出来的，和 Rime 没关系，别被 Rime 的空候选顶掉。 */
     fun showEnglishCandidates(items: List<String>) {
         if (items.isEmpty() || !::toolbar.isInitialized) return
+        if (emojiMode.enabled) return
         englishMode = true
         lastCandidates = items.map { CandidateProto(it, "", "") }.toTypedArray()
         toolbar.updateCandidates(lastCandidates, 0)
@@ -692,6 +774,252 @@ class KeyboardWindow(di: DI) :
         clearCandidates()
     }
 
+    /**
+     * 进 / 出 emoji 模式。
+     *
+     * 只换候选来源，不换键盘、不换语言、不动高度——底行那颗 🙂 也只改高亮。
+     */
+    fun toggleEmojiMode() {
+        if (emojiMode.enabled) {
+            exitEmojiMode()
+        } else {
+            enterEmojiMode()
+        }
+    }
+
+    private fun enterEmojiMode() {
+        if (!::toolbar.isInitialized) return
+        emojiMode.enter()
+        englishMode = false
+        if (::toolbar.isInitialized) toolbar.setEmojiCandidateMode(true)
+        // 中文正在拼的那串由 EmojiMode 提交掉，候选条交给 emoji
+        refreshEmojiCandidates()
+        syncEmojiKeyState()
+    }
+
+    private fun exitEmojiMode() {
+        emojiMode.exit()
+        emojiVariants.dismiss()
+        if (::toolbar.isInitialized) toolbar.setEmojiCandidateMode(false)
+        clearCandidates()
+        syncEmojiKeyState()
+        // 回到中文时 Rime 组合已经清空，候选等下一次输入自己会回来；
+        // 回到英文时按光标前的词补一次，和切语言那条路保持一致。
+        if (rime.run { statusCached }.isAsciiMode) {
+            service.lifecycleScope.launch { service.updateEnglishSuggestions() }
+        }
+    }
+
+    /**
+     * 🙂 那颗键的亮灭跟着模式走。
+     *
+     * 键盘布局本身不变，所以只需要把当前键面上那颗键的状态改掉再重绘；
+     * 键不在这个布局上（比如符号页）就什么都不做。
+     */
+    private fun syncEmojiKeyState() {
+        applyEmojiKeyState(activeKeyboard ?: return)
+    }
+
+    /** 把 emoji 模式的亮灭落到某张具体布局上；布局里没有这颗键就什么都不做。 */
+    private fun applyEmojiKeyState(keyboard: Keyboard) {
+        val key = keyboard.keys.firstOrNull { it.click?.command == "emoji_mode" } ?: return
+        key.setOnState(emojiMode.enabled)
+        currentKeyboardView?.invalidateKeyByIndex(key.index)
+    }
+
+    /**
+     * 打字时刷新 emoji 候选。
+     *
+     * 空查询显示最近用过的（进模式就能直接抓），有查询显示搜索结果。
+     */
+    private fun refreshEmojiCandidates() {
+        if (!emojiMode.enabled || !::toolbar.isInitialized) return
+        EmojiIndex.ensureLoaded(context)
+        val recents = EmojiUsage.recent(EmojiIndex.STRIP_LIMIT)
+        val query = emojiMode.query
+        val items =
+            if (query.isEmpty()) {
+                recents.ifEmpty { EmojiIndex.emojis.take(EmojiIndex.STRIP_LIMIT) }
+            } else {
+                EmojiIndex.search(query, EmojiIndex.STRIP_LIMIT, recents)
+            }
+
+        // 搜索无结果时**不能**把候选行撤掉退回「品牌 + 胶囊」：
+        // 那样用户看不到自己打了什么，也分不清是「没搜到」还是「模式关了」，
+        // 只会觉得键盘坏了。保留候选行，用它显示一条占位提示。
+        if (items.isEmpty()) {
+            lastCandidates = emptyArray()
+            toolbar.showEmojiNoResult(query)
+            setComposingToolbar(true)
+            collapseCandidatePanel()
+            return
+        }
+
+        lastCandidates = items.map { CandidateProto(it, "", "") }.toTypedArray()
+        toolbar.updateCandidates(lastCandidates, 0)
+        setComposingToolbar(true)
+        if (candidatesExpanded && ::candidatePanel.isInitialized) {
+            candidatePanel.show(lastCandidates)
+            restartCandidatePages()
+        }
+    }
+
+    /** emoji 模式下按了字母 / 退格：返回 true 表示被吃掉，别再送给 Rime。 */
+    fun handleEmojiChar(ch: Char): Boolean {
+        if (!emojiMode.onChar(ch)) return false
+        syncEmojiComposing()
+        refreshEmojiCandidates()
+        return true
+    }
+
+    /**
+     * 把 emoji 搜索词写进输入框，显示成**带下划线的组合文本**。
+     *
+     * 不写进去的话，用户打了 `pisa` 在输入框里什么都看不到——只有候选条在变，
+     * 看起来就像键盘吞字。这一条不管是拼音还是英文模式都要有，否则「打字没反应」。
+     *
+     * 用 setComposingText 而不是 commitText：这样点 emoji 时 `commitText` 会自动
+     * 替换掉这段组合文本，不会在输入框里留下 `pisa🍕`。
+     */
+    private fun syncEmojiComposing() {
+        val ic = service.currentInputConnection ?: return
+        val query = emojiMode.query
+        runCatching {
+            if (query.isNotEmpty()) {
+                // 组合文本整段重设：查询词最长也就十来个字母，这点开销比维护增量状态稳。
+                ic.setComposingText(query, 1)
+            } else if (emojiComposingLength > 0) {
+                // 清空时**必须先把那串字母删掉**再结束组合。
+                // 只调 finishComposingText() 的话，组合态结束、文字留下，
+                // 输入框里就会永远躺着一串 `pisa` —— 这正是「✕ 点了没反应」的真相。
+                ic.deleteSurroundingText(emojiComposingLength, 0)
+                ic.finishComposingText()
+            }
+            emojiComposingLength = query.length
+        }
+    }
+
+    /**
+     * 上一次写进输入框的组合文本长度。
+     *
+     * 清空 / 退格时要知道该删几个字符。不能拿 `emojiMode.query.length` 去删——
+     * 那时 query 已经变短了，删的会比实际少。
+     */
+    private var emojiComposingLength: Int = 0
+
+    /**
+     * 把一次按键还原成它要输入的字符，供 emoji 搜索用。
+     *
+     * 虚拟键盘的字母是**键码**进来的（`KEYCODE_Q` 之类），不是现成的字符，
+     * 所以这里做一次映射；其它键（退格、空格、回车、符号页的键）返回 null，
+     * 交给原来的路径处理。
+     */
+    fun emojiCharFor(keyEventCode: Int, metaState: Int): Char? {
+        if (!emojiMode.enabled) return null
+        val shift = metaState and KeyEvent.META_SHIFT_ON != 0
+        return when (keyEventCode) {
+            in KeyEvent.KEYCODE_A..KeyEvent.KEYCODE_Z -> {
+                val lower = 'a' + (keyEventCode - KeyEvent.KEYCODE_A)
+                if (shift) lower.uppercaseChar() else lower
+            }
+
+            in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9 -> '0' + (keyEventCode - KeyEvent.KEYCODE_0)
+
+            // 空格**不**当搜索字符：emoji 模式下按空格就是想打个空格，
+            // 吃掉它会让底行那颗最大的键变成哑键。让它照常落进输入框。
+            else -> null
+        }
+    }
+
+    /**
+     * 一整段文字进来（可能是多字符）。
+     *
+     * 只有全部字符都能被 emoji 模式接受时才整段吃掉；有一个吃不下就把整段原样放行，
+     * 免得出现「吃掉一半、剩下半截跑进拼音」的错位。
+     */
+    fun handleEmojiText(input: String): Boolean {
+        if (!emojiMode.enabled) return false
+        if (input.isEmpty()) return false
+        // 先问「整段能不能全吃」，再真的吃。
+        // 如果直接 all { onChar(it) }，遇到中途不可接受的字符会把前面几个已经
+        // 塞进 query 的字留下，而返回值是 false——那半截就既没进 Rime 也没进搜索框，
+        // 用户会觉得打字丢字。
+        if (!input.all { EmojiQuery.isSearchable(it) }) return false
+        input.forEach { emojiMode.onChar(it) }
+        syncEmojiComposing()
+        refreshEmojiCandidates()
+        return true
+    }
+
+    /**
+     * 清空 emoji 搜索词。
+     *
+     * 只清搜索词，输入框里的正文一个字都不动——这串字母是我们自己用
+     * setComposingText 写进去的，finishComposingText 会把这段组合态收掉。
+     */
+    private fun clearEmojiQuery() {
+        if (!emojiMode.enabled) return
+        emojiMode.clearQuery()
+        syncEmojiComposing()
+        refreshEmojiCandidates()
+    }
+
+    fun handleEmojiBackspace(): Boolean {
+        if (!emojiMode.onBackspace()) return false
+        syncEmojiComposing()
+        refreshEmojiCandidates()
+        return true
+    }
+
+    /**
+     * 点了一个 emoji：把它插到光标处。
+     *
+     * 关键点：**搜索时打的那串字母从来没有进过输入框**。
+     * 字母在 `onKey` 里就被 emoji 模式吃掉了（见 [handleEmojiChar]），
+     * 输入框里只有用户原本的正文。所以这里**不能** deleteSurroundingText——
+     * 那删掉的是用户自己的字，不是我们打的搜索词。
+     *
+     * 中文模式下倒是要先把 Rime 里挂着的组合收掉（进 emoji 模式时已经提交了，
+     * 这里是兜底，防止中途又有组合冒出来）。
+     */
+    private fun pickEmoji(emoji: String) {
+        val ic = service.currentInputConnection ?: return
+        EmojiUsage.record(emoji)
+        emojiMode.onPicked()
+        emojiVariants.dismiss()
+
+        // 输入框里那段带下划线的搜索词是**我们自己**用 setComposingText 写的，
+        // 和 Rime 的组合无关。commitText 会就地把它替换掉——这正是要的效果。
+        // 所以这里不能再调 rime.clearComposition()：那是异步任务，晚一步执行时
+        // 会把刚提交的 emoji 一起清掉（表现为「点了没反应」）。
+        ic.beginBatchEdit()
+        try {
+            ic.commitText(emoji, 1)
+        } finally {
+            ic.endBatchEdit()
+        }
+
+        // 提交后候选条回到「最近」那一屏，方便连续发几个
+        refreshEmojiCandidates()
+    }
+
+    /**
+     * 长按候选：emoji 弹肤色 / 性别变体，别的不响应。
+     *
+     * 没有变体的 emoji（🍕、🚀）不弹空窗，直接什么都不做——弹一个只有它自己的
+     * 一格窗只会让人困惑。
+     */
+    private fun showEmojiVariants(
+        index: Int,
+        anchor: View,
+    ) {
+        if (!emojiMode.enabled) return
+        val base = lastCandidates.getOrNull(index)?.text ?: return
+        val variants = EmojiIndex.variantsOf(base)
+        if (variants.isEmpty()) return
+        emojiVariants.show(anchor, base, variants) { picked -> pickEmoji(picked) }
+    }
+
     /** 不管候选是 Rime 的中文还是词表给的英文，一律清掉，顶栏交还「品牌 + 胶囊」。 */
     private fun clearCandidates() {
         englishMode = false
@@ -701,7 +1029,8 @@ class KeyboardWindow(di: DI) :
     }
 
     override fun onCandidateListUpdate(data: Candidates.Bulk) {
-        if (englishMode) return
+        // emoji 模式下 Rime 的候选不该露头（进模式时组合已经提交掉了）
+        if (englishMode || emojiMode.enabled) return
         candidateTotal = data.total
         if (data.candidates.isEmpty()) {
             lastCandidates = emptyArray()
@@ -734,15 +1063,47 @@ class KeyboardWindow(di: DI) :
         if (lastCandidates.isEmpty() || !::candidatePanel.isInitialized) return false
         candidatesExpanded = true
         if (::toolbar.isInitialized) toolbar.setExpanded(true)
-        candidatePanel.show(lastCandidates)
-        candidatePanel.visibility = View.VISIBLE
-        restartCandidatePages()
+
+        // emoji 用 9 列网格，中文/英文用 3 列。两种网格列数不同，换模式就整个换掉面板。
+        // 面板只在这一刻存在，重建不丢任何状态。
+        val wantEmojiGrid = emojiMode.enabled
+        if (panelIsEmojiGrid != wantEmojiGrid) {
+            panelIsEmojiGrid = wantEmojiGrid
+            (candidatePanel.parent as? android.view.ViewGroup)?.removeView(candidatePanel)
+            candidatePanel = buildCandidatePanel(emojiGrid = wantEmojiGrid)
+            keyArea.apply {
+                // 插回 trackpadHint 之前，保持叠放次序
+                addView(
+                    candidatePanel,
+                    indexOfChild(trackpadHint).coerceAtLeast(0),
+                    FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        currentKeyboardHeightPx(),
+                    ),
+                )
+            }
+        }
+
+        if (wantEmojiGrid) {
+            // emoji 全在内存里：展开时给**全部**匹配结果，而不是候选条那 24 个。
+            // 候选条是横着滑的窄条，只放得下开头几个；展开就是要把剩下的摊开。
+            val expanded = emojiCandidatesForPanel()
+            if (expanded.isNotEmpty()) lastCandidates = expanded
+            candidatePanel.show(lastCandidates)
+            candidatePanel.visibility = View.VISIBLE
+        } else {
+            panelSource = lastCandidates
+            candidatePanel.show(lastCandidates)
+            candidatePanel.visibility = View.VISIBLE
+            restartCandidatePages()
+        }
         return true
     }
 
     fun collapseCandidatePanel() {
         if (!candidatesExpanded) return
         candidatesExpanded = false
+        panelSource = null
         // 在飞的分页请求作废：回来时会发现 token 对不上
         candidatePagesToken++
         candidatePages.reset(lastCandidates.size, exhausted = true)
@@ -771,9 +1132,30 @@ class KeyboardWindow(di: DI) :
         requestMoreCandidates()
     }
 
+    /**
+     * 展开面板要显示的 emoji。
+     *
+     * 候选条只取 24 个（横条放不下更多），展开时把同一次查询的完整结果拿出来。
+     * 没有查询时给「最近 + 全部分类」，这样点开就能一路滑到底。
+     */
+    private fun emojiCandidatesForPanel(): Array<CandidateProto> {
+        if (!emojiMode.enabled) return emptyArray()
+        EmojiIndex.ensureLoaded(context)
+        val recents = EmojiUsage.recent(EmojiIndex.STRIP_LIMIT)
+        val items =
+            if (emojiMode.query.isEmpty()) {
+                if (recents.isEmpty()) EmojiIndex.emojis else recents + EmojiIndex.emojis
+            } else {
+                EmojiIndex.search(emojiMode.query, PANEL_EMOJI_LIMIT, recents)
+            }
+        return items.distinct().map { CandidateProto(it, "", "") }.toTypedArray()
+    }
+
     /** 向 Rime 要下一批候选，回来接在展开面板后面。 */
     private fun requestMoreCandidates() {
         if (!candidatesExpanded || !::candidatePanel.isInitialized) return
+        // emoji 的候选全在本地，问 Rime 要只会拿到中文候选接到 emoji 后面去。
+        if (emojiMode.enabled) return
         val offset = candidatePages.beginLoad() ?: return
         val token = candidatePagesToken
         val limit = candidatePages.pageSize
@@ -880,6 +1262,9 @@ class KeyboardWindow(di: DI) :
         VoiceSession.removeListener(voiceSessionListener)
         currentKeyboardView?.onDetach()
         englishMode = false
+        // 变体弹窗是独立的 PopupWindow，不跟着键盘一起隐藏——不主动收会浮在
+        // 下一个应用上面。
+        emojiVariants.dismiss()
         setComposingToolbar(false)
         collapseCandidatePanel()
     }

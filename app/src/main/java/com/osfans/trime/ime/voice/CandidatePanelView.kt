@@ -28,6 +28,10 @@ import com.osfans.trime.ui.jackvoice.JvColors
  */
 class CandidatePanelView(
     context: Context,
+    /** 每行几列。中文/英文候选是 3；emoji 网格要 9，一屏才看得下足够多。 */
+    private val perRow: Int = DEFAULT_PER_ROW,
+    /** 行高（dp）。中文候选 50；emoji 用 44，9 列才不显得扁。 */
+    private val rowHeightDp: Int = DEFAULT_ROW_HEIGHT_DP,
 ) : ScrollView(context) {
     /** 参数是候选在**全量列表**里的下标。 */
     var onPick: ((Int) -> Unit)? = null
@@ -95,7 +99,7 @@ class CandidatePanelView(
         grid.removeView(footer)
         removeSpacers()
         items.forEachIndexed { offset, candidate ->
-            if (row == null || filled == PER_ROW) newRow()
+            if (row == null || filled == perRow) newRow()
             addCell(candidate, base + offset)
             filled++
         }
@@ -131,7 +135,7 @@ class CandidatePanelView(
         filled = 0
         spacers.clear()
         shown.forEachIndexed { index, candidate ->
-            if (row == null || filled == PER_ROW) newRow()
+            if (row == null || filled == perRow) newRow()
             addCell(candidate, index)
             filled++
         }
@@ -148,7 +152,7 @@ class CandidatePanelView(
         filled = 0
         grid.addView(
             newRow,
-            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(ROW_HEIGHT_DP)),
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(rowHeightDp)),
         )
     }
 
@@ -164,8 +168,8 @@ class CandidatePanelView(
 
     private fun padRow() {
         val current = row ?: return
-        if (filled in 1 until PER_ROW) {
-            repeat(PER_ROW - filled) {
+        if (filled in 1 until perRow) {
+            repeat(perRow - filled) {
                 val spacer = View(context)
                 current.addView(
                     spacer,
@@ -196,7 +200,8 @@ class CandidatePanelView(
     ): TextView = TextView(context).apply {
         text = candidate.text
         setTextColor(JvColors.text)
-        setTextSize(TypedValue.COMPLEX_UNIT_SP, 19f)
+        // 中文候选是给眼睛读的字，19sp 正好；emoji 是图形，得撑到接近格子的高度。
+        setTextSize(TypedValue.COMPLEX_UNIT_SP, if (perRow > DEFAULT_PER_ROW) 26f else 19f)
         gravity = Gravity.CENTER
         maxLines = 1
         isClickable = true
@@ -209,8 +214,12 @@ class CandidatePanelView(
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     companion object {
-        private const val PER_ROW = 3
-        private const val ROW_HEIGHT_DP = 50
+        const val DEFAULT_PER_ROW = 3
+        const val DEFAULT_ROW_HEIGHT_DP = 50
+
+        /** emoji 网格：9 列 × 44dp。411dp 宽的屏一格约 45dp，手指按得住。 */
+        const val EMOJI_PER_ROW = 9
+        const val EMOJI_ROW_HEIGHT_DP = 44
 
         /** 距离底部还有这么多像素就去要下一批。 */
         private const val LOAD_MORE_THRESHOLD_DP = 120

@@ -186,6 +186,8 @@ class CommonKeyboardActionListener(override val di: DI) : DIAware {
                     "voice_back" -> windowManager.attachWindow(keyboardWindow)
                     // 底行的动作键：组合中先确认拼写上屏，再按一次才执行宿主动作
                     "commit_action" -> service.confirmCompositionAndAct()
+                    // 表情键：只切候选来源，键盘布局一个字都不动
+                    "emoji_mode" -> keyboardWindow.toggleEmojiMode()
                     "menu_keyboard" -> windowManager.attachWindow(SwitchOptionWindow(di))
                     "clipboard_window" -> handleClipboardWindow(arg)
                     "set_color_scheme" -> handleColorScheme(arg)
@@ -379,6 +381,20 @@ class CommonKeyboardActionListener(override val di: DI) : DIAware {
                 keyEventCode: Int,
                 metaState: Int,
             ) {
+                // emoji 模式下退格先删搜索词；搜索词空着才落到下面去删正文。
+                // 必须在送 Rime 之前拦：进了 Rime 就等于在删拼音组合。
+                if (keyEventCode == KeyEvent.KEYCODE_DEL && keyboardWindow.handleEmojiBackspace()) {
+                    return
+                }
+
+                // emoji 模式下字母键变成搜索词，绝不能送进 Rime——否则拼音开始组字，
+                // 输入框里出现带下划线的半截拼音，而候选条又还在显示 emoji。
+                // 注意：虚拟键盘的字母走的是这里（onKey），**不是** onText；
+                // onText 只负责非 ASCII 字符和 {} 序列，别把拦截只写在那边。
+                keyboardWindow.emojiCharFor(keyEventCode, metaState)?.let { ch ->
+                    if (keyboardWindow.handleEmojiChar(ch)) return
+                }
+
                 // An uppercase letter key (e.g. from `{x: A}`) is passed to
                 // rime as the uppercase keysym with Shift, matching what a
                 // physical keyboard reports via the unicode char, so that
@@ -423,6 +439,11 @@ class CommonKeyboardActionListener(override val di: DI) : DIAware {
             override fun onText(input: String) {
                 if (input.isEmpty()) return
                 Timber.d("onText: $input")
+
+                // emoji 模式下字母不进 Rime，也不进宿主输入框——它们是搜索词。
+                // 这里必须挡在 postRimeJob 前面：一旦进了 Rime，拼音会开始组字。
+                if (keyboardWindow.handleEmojiText(input)) return
+
                 val status = rime.run { statusCached }
                 if (!input[0].isAsciiPrintable() && status.isComposing) {
                     service.postRimeJob { commitComposition() }

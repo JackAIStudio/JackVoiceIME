@@ -67,6 +67,7 @@
     <string name="key_swipe_travel">Min travel for gesture</string>
     <string name="trime_app_slogan">Speak it. It’s written.</string>
     <string name="keyboard_trackpad_hint">Move cursor</string>
+    <string name="emoji_search_empty">No emoji matches “%1$s”</string>
     <string name="custom_sound_effect_name">Custom key Sound Effect</string>
     <string name="setup__next">Next</string>
     <string name="done">Done</string>

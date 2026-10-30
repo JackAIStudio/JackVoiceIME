@@ -971,6 +971,15 @@ preset_keys:
   # 以前这颗键叫「拼音」，看起来像是语言开关，点一下还会把英文强制切回中文。
   Keyboard_letters: {label: 字母, send: Eisu_toggle, select: .default}
   Keyboard_switch: {label: 鍵盤, send: Eisu_toggle, select: .next}
+  # 表情键：**不改布局、不改语言**，只让候选行换成 emoji 来源。
+  # 所以它不是 Eisu_toggle（那会换键面），而是一条 function 命令；键盘外观、
+  # 高度、底行全都保持原样，这正是「emoji 不是一门语言，是一种候选来源」。
+  #
+  # 图标用 `ic@emoticon_outline`（社区 Material 的**描边**笑脸），不用彩色 emoji 字符：
+  # 彩色 emoji 在键盘上一格黄脸太抢眼，而且是固定色，深色模式下会跟键面打架。
+  # ic@ 图标走 IconicsDrawable，颜色由 KeyView 按 key_text_color 着色，
+  # 所以浅色模式是黑线、深色模式是白线，和 123 / ⌫ 那些键完全一致。
+  Keyboard_emoji: {label: 'ic@emoticon_outline', send: FUNCTION, command: emoji_mode}
   liquid_keyboard_switch: { label: 更多, send: FUNCTION, command: liquid_keyboard, option: "更多" }
   liquid_keyboard_exit: {label: 返回, send: FUNCTION, command: liquid_keyboard, option: "-1"}  #退出liquidkeyboard
   liquid_keyboard_emoji: { label: 🙂, send: FUNCTION, command: liquid_keyboard, option: "emoji" }
@@ -1254,11 +1263,16 @@ preset_keyboards:
     - {click: 'n'}
     - {click: 'm'}
     - {click: BackSpace, width: 15}
-    # 第四排：只留 123 / 空格 / 动作键——对齐 Typeless。中英和语音已经收进顶栏胶囊。
+    # 第四排：123 / 表情 / 空格 / 动作键——对齐 Typeless。中英和语音已经收进顶栏胶囊。
     # 动作键用 CommitAction：组合中第一下只确认拼写（下划线里的英文/编码原样上屏），
     # 不选中文候选、也不触发搜索；组合结束后再按才执行宿主动作。
+    #
+    # 表情键是「换键面」，不是「换语言」：它只把候选行换成 emoji 来源，键盘布局和
+    # 语言都不动（所以这里不写 ascii_mode）。宽度是从空格那里匀出来的——123 和动作键
+    # 的位置、宽度一个像素都没动，空格 70% → 58%（符号页的空格本来就是 52%）。
     - {click: Keyboard_symbols, long_click: Keyboard_number, width: 15}
-    - {click: space, width: 70}
+    - {click: Keyboard_emoji, width: 12}
+    - {click: space, width: 58}
     - {click: CommitAction, width: 15}
   us_intl:
     name: 美式國際

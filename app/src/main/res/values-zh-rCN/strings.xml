@@ -63,6 +63,7 @@
     <string name="key_swipe_travel">触发按键滑动手势的距离</string>
     <string name="trime_app_slogan">说话即成文</string>
     <string name="keyboard_trackpad_hint">移动光标</string>
+    <string name="emoji_search_empty">没有匹配「%1$s」的表情</string>
     <string name="custom_sound_effect_name">自定义按键音效</string>
     <string name="setup__next">下一步</string>
     <string name="done">完成</string>

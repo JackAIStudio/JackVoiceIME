@@ -183,6 +183,16 @@ class Key(
         return isOn
     }
 
+    /**
+     * 直接落位「亮 / 不亮」，不走 [setOn] 的翻转逻辑。
+     *
+     * 表情键是模式开关：它亮不亮由 EmojiMode 说了算，不是按键自己翻转。
+     * 用 [setOn] 会因为「亮着再点亮就灭」跟真实状态打架。
+     */
+    fun setOnState(on: Boolean) {
+        isOn = on
+    }
+
     private val keyOffsetX: Float
         get() = if (isPressed) keyPressOffsetX else 0f
     private val keyOffsetY: Float

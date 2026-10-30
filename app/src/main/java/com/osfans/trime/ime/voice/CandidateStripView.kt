@@ -31,6 +31,14 @@ class CandidateStripView(
     /** 参数是候选在**全量列表**里的下标。 */
     var onPick: ((Int) -> Unit)? = null
 
+    /**
+     * 长按某个候选。
+     *
+     * 只有 emoji 会用到：长按弹肤色 / 性别变体。中文候选长按没有额外语义，所以
+     * 这个回调为空时保持原来的行为（不长按）。
+     */
+    var onLongPick: ((index: Int, anchor: android.view.View) -> Unit)? = null
+
     private var lastItems: Array<CandidateProto> = emptyArray()
     private var lastHighlighted = 0
 
@@ -92,6 +100,14 @@ class CandidateStripView(
         setOnClickListener {
             InputFeedbackManager.keyPressVibrate(this)
             onPick?.invoke(index)
+        }
+        if (onLongPick != null) {
+            isLongClickable = true
+            setOnLongClickListener {
+                InputFeedbackManager.keyPressVibrate(this)
+                onLongPick?.invoke(index, this)
+                true
+            }
         }
     }
 

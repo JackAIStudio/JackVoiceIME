@@ -115,7 +115,8 @@ class ThemeGoldenTest :
 
                 Then("color schemes and preset keys are decoded") {
                     theme.presetColorSchemes.size shouldBe 38
-                    theme.presetKeys.size shouldBe 111
+                    // 112 = 上游的 111 个 + 我们加的 Keyboard_emoji（底行那颗表情键）
+                    theme.presetKeys.size shouldBe 112
                     val brightnessDown = theme.presetKeys.getValue("BRIGHTNESS_DOWN")
                     brightnessDown.label shouldBe "亮度-"
                     brightnessDown.send shouldBe "BRIGHTNESS_DOWN"

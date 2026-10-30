@@ -18,6 +18,7 @@ import android.view.View
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.osfans.trime.R
 import com.osfans.trime.core.CandidateProto
 import com.osfans.trime.ime.keyboard.InputFeedbackManager
 import com.osfans.trime.ui.jackvoice.JvColors
@@ -45,6 +46,7 @@ class VoiceToolbarView(
     var onPinyinTap: (() -> Unit)? = null
     var onEnglishTap: (() -> Unit)? = null
     var onHideTap: (() -> Unit)? = null
+
     /** 点左侧品牌字样：打开应用主页面（默认调用 AppUtils.launchMainActivity）。 */
     var onBrandTap: (() -> Unit)? = null
 
@@ -53,6 +55,12 @@ class VoiceToolbarView(
 
     /** 点右边的展开箭头：展开或收起整页候选。 */
     var onExpandTap: (() -> Unit)? = null
+
+    /** 长按候选：只有 emoji 用得到，弹肤色 / 性别变体。 */
+    var onCandidateLongPick: ((index: Int, anchor: View) -> Unit)? = null
+
+    /** 点候选行里的 ✕：把已打的搜索词一次清掉。 */
+    var onClearQuery: (() -> Unit)? = null
 
     /** 点候选行里的语言小键：切到另一种语言（中文 ↔ 英文）。 */
     var onLanguageSwitchTap: (() -> Unit)? = null
@@ -107,6 +115,23 @@ class VoiceToolbarView(
     private val candidates =
         CandidateStripView(context).apply {
             onPick = { index -> onCandidatePick?.invoke(index) }
+            onLongPick = { index, anchor -> onCandidateLongPick?.invoke(index, anchor) }
+        }
+
+    /**
+     * 表情搜索「没找到」时顶上来的那行字。
+     *
+     * 和 [candidates] 叠在同一格里（互斥显示）：有结果时给候选条，没结果时给这行提示。
+     */
+    private val emojiHint =
+        TextView(context).apply {
+            gravity = Gravity.CENTER_VERTICAL
+            setTextColor(JvColors.textSecondary)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
+            setPadding(dp(12), 0, dp(12), 0)
+            visibility = View.GONE
         }
 
     private val expandButton =
@@ -163,18 +188,55 @@ class VoiceToolbarView(
             )
         }
 
+    /**
+     * 候选行里的 ✕：清空 emoji 搜索词。
+     *
+     * 没有它的时候，打错了只能一个字一个字退格——搜索词长到十几个字母时非常烦。
+     * 只在 emoji 模式下显示（`emojiCustomMode`），别的时候这一格不占地方。
+     */
+    private val clearQuery =
+        TextView(context).apply {
+            text = "✕"
+            gravity = Gravity.CENTER
+            setTextColor(JvColors.textSecondary)
+            setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
+            isClickable = true
+            visibility = View.GONE
+            setOnClickListener {
+                InputFeedbackManager.keyPressVibrate(this)
+                onClearQuery?.invoke()
+            }
+        }
+
+    /** 当前候选行是不是 emoji 来源：决定 ✕ 要不要露出来。 */
+    private var emojiCustomMode = false
+
     private val composingRow =
         LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             visibility = GONE
             addView(
-                candidates,
+                // 候选条和「没搜到」提示叠在同一格：同一时刻只有一个可见。
+                FrameLayout(context).apply {
+                    addView(
+                        candidates,
+                        LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT),
+                    )
+                    addView(
+                        emojiHint,
+                        LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT),
+                    )
+                },
                 LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.MATCH_PARENT, 1f),
             )
             addView(
                 composingVoice,
                 LinearLayout.LayoutParams(dp(40), LinearLayout.LayoutParams.MATCH_PARENT),
+            )
+            addView(
+                clearQuery,
+                LinearLayout.LayoutParams(dp(34), LinearLayout.LayoutParams.MATCH_PARENT),
             )
             addView(
                 langSwitch,
@@ -252,10 +314,22 @@ class VoiceToolbarView(
         composingRow.visibility = if (value) View.VISIBLE else View.GONE
         if (!value) {
             candidates.clear()
+            emojiHint.visibility = View.GONE
             setExpanded(false)
         }
         // 候选行的展开键和新露出来的收起格都会占右上角，切换后重算一次代理。
         post { updateHideTouchDelegate() }
+    }
+
+    /**
+     * 候选行进入 / 离开 emoji 来源。
+     *
+     * 只有 emoji 模式才需要 ✕ 和「没找到」提示，中文/英文候选不该出现这两个东西。
+     */
+    fun setEmojiCandidateMode(emoji: Boolean) {
+        emojiCustomMode = emoji
+        clearQuery.visibility = if (emoji) View.VISIBLE else View.GONE
+        if (!emoji) emojiHint.visibility = View.GONE
     }
 
     fun updateCandidates(
@@ -263,6 +337,26 @@ class VoiceToolbarView(
         highlighted: Int,
     ) {
         candidates.update(items, highlighted)
+        emojiHint.visibility = View.GONE
+    }
+
+    /**
+     * 表情搜索没有结果。
+     *
+     * 候选行必须留着——它是「我正在搜」的唯一反馈。把它撤掉退回品牌行的话，
+     * 用户看不到自己打了什么，只会以为键盘没反应。
+     */
+    fun showEmojiNoResult(query: String) {
+        candidates.clear()
+        // 查询词太长时只截前 8 个字符：整串丢给 TextView 会被它自己按像素截断，
+        // 断在哪一格不可控，看着像乱码。这里主动截断，省略号位置就是可预期的。
+        val shown = if (query.length > NO_RESULT_QUERY_MAX) {
+            query.take(NO_RESULT_QUERY_MAX) + "…"
+        } else {
+            query
+        }
+        emojiHint.text = context.getString(R.string.emoji_search_empty, shown)
+        emojiHint.visibility = View.VISIBLE
     }
 
     /** 展开状态时箭头朝上，再点收起。 */
@@ -290,6 +384,8 @@ class VoiceToolbarView(
         langSwitch.setTextColor(JvColors.textSecondary)
         setActive(activeTab)
         candidates.refreshColors()
+        emojiHint.setTextColor(JvColors.textSecondary)
+        clearQuery.setTextColor(JvColors.textSecondary)
         chevronGlyph.refreshColors()
         hideGlyph.refreshColors()
         waveGlyph.refreshColors()
@@ -338,6 +434,9 @@ class VoiceToolbarView(
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     companion object {
+        /** 「没有匹配」提示里最多显示几个字符，超出用省略号。 */
+        private const val NO_RESULT_QUERY_MAX = 8
+
         const val HEIGHT_DP = 44
 
         /** 顶栏距键盘区顶部的留白。语音面板和打字键盘用同一个值，切过去胶囊不会上下跳。 */
