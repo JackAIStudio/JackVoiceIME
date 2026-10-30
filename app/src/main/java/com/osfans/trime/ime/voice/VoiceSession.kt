@@ -5,6 +5,7 @@
 
 package com.osfans.trime.ime.voice
 
+import android.content.Context
 import android.os.Handler
 import android.os.Looper
 import android.widget.Toast
@@ -91,6 +92,9 @@ object VoiceSession : VoiceEngine.Listener {
     /** 「正在重新识别」最多让用户等这么久；到点强制恢复可操作。 */
     private const val RETRY_UI_TIMEOUT_MS = 30_000L
 
+    /** 等麦克风前台服务就绪的上限，见 [startWatchdog]。 */
+    private const val START_TIMEOUT_MS = 1_500L
+
     /**
      * 窗口是短期对象（主题切换会重建 InputView），用弱引用收着：
      * 窗口正常 detach 时会自己摘掉；漏掉的那个也不会把整个窗口钉在内存里。
@@ -105,11 +109,59 @@ object VoiceSession : VoiceEngine.Listener {
     val isBound: Boolean get() = service != null
 
     /**
+     * 这一轮录音是谁开的（应用上下文）。
+     *
+     * 面板 / 键盘开的和 [service] 是同一个东西；**通知栏开的那一轮键盘往往没展开**，
+     * 输入法服务根本不存在，但录音、落盘、复制到剪贴板都只需要一个 Context。
+     * 收尾时用它，别再用 `service` 空判断把结果丢掉。
+     */
+    @Volatile
+    private var captureHost: Context? = null
+
+    /**
+     * 「已经决定要录，正等前台服务起来」的那一轮。
+     *
+     * 前台状态是异步拿到的（`startForegroundService` → 服务 `onStartCommand`），
+     * 麦克风必须等到那一刻才拿得到。这里存着上下文，等 [onForegroundReady] 来取。
+     * 非空 = 有一轮正在等着开录。
+     */
+    @Volatile
+    private var pendingStart: Context? = null
+
+    /** 开录前那次麦克风探测的结果，等 [onForegroundReady] 里给提示用。 */
+    private var pendingProbe: MicStatus.Snapshot? = null
+
+    /**
      * 前台服务该不该活着：只有真的在录音 / 等终稿时才算。
      *
      * [VoiceCaptureService] 用它挡掉迟到的启动请求，也用它决定要不要撤通知。
+     *
+     * **「已经决定要录、正等前台」也算**：从通知栏开录时，服务先起来、
+     * 录音随后在 [onForegroundReady] 里才开始，中间那一小段如果不算数，
+     * 服务会把自己当成迟到的请求当场收摊，录音就永远起不来。
      */
-    fun isCapturing(): Boolean = VoiceEngine.isRecording || VoiceEngine.isWaitingFinal
+    fun isCapturing(): Boolean = VoiceEngine.isRecording || VoiceEngine.isWaitingFinal || pendingStart != null
+
+    /**
+     * 状态和引擎对不上时，按引擎为准摆正。
+     *
+     * 什么时候会错开：进程被系统重建（`VoiceEngine` 的静态字段跟着旧进程一起没了，
+     * 但通知栏那条卡片的语义、`state` 的残留可能还让人以为在录）、上一轮中途失败、
+     * 前台服务被 ROM 掐掉。表现是：点通知第一下什么也没发生（走了「停止」分支），
+     * 点第二下才开始录。
+     *
+     * 这里只做**自愈**，不启动也不停止任何东西——真正的动作由调用方决定。
+     */
+    fun reconcileIfStale() {
+        if (pendingStart != null) return
+        if (VoiceEngine.isRecording || VoiceEngine.isWaitingFinal) return
+        if (state == VoiceState.Idle && captureHost == null) return
+        Timber.w("会话状态残留（state=$state），引擎已空闲，摆正为空闲")
+        state = VoiceState.Idle
+        captureHost = null
+        pendingProbe = null
+        notifyState()
+    }
 
     /** 录音中最后一段流式结果：切回面板时用它把预览恢复出来。 */
     @Volatile
@@ -271,16 +323,33 @@ object VoiceSession : VoiceEngine.Listener {
 
     // ── 会话控制（面板的麦克风键 / 通知栏都走这里）──────────────────────
 
-    /** 开始一轮听写。已经录着 / 等终稿时忽略。 */
-    fun start() {
-        val svc = service ?: return
-        if (state != VoiceState.Idle) return
+    /**
+     * 开始一轮听写。已经录着 / 等终稿时忽略。
+     *
+     * @param host 谁来当这轮录音的上下文。面板 / 键盘走默认（[service]）；
+     *             通知栏那条常驻入口传自己的 Context——**键盘没展开时输入法服务
+     *             可能根本不存在**，而用户要的恰恰是那种时候也能录。
+     *             没有输入法就意味着没有落点，终稿会走剪贴板（见 [VoiceDelivery]）。
+     * @return 真的开始录了才为 true。界面据此决定要不要提示 / 退回 App。
+     */
+    fun start(host: Context? = service): Boolean {
+        val svc = host ?: return false
+        // 已经有一轮在等前台服务起来：再点一下别再拉一次，否则会重复开录。
+        if (pendingStart != null) return false
         // 界面状态偶尔会和引擎错开一拍：以引擎为准，别把正在录的那一轮掐掉。
         if (VoiceEngine.isRecording || VoiceEngine.isWaitingFinal) {
             state =
                 if (VoiceEngine.isRecording) VoiceState.Recording else VoiceState.Thinking
             notifyState()
-            return
+            return false
+        }
+        // 引擎已经闲着，状态却还写着录音 / 处理中：那是上一轮中途失败留下的残留
+        // （前台服务没起来、进程被重建、通知被系统清掉）。**不能照着状态拒绝**——
+        // 否则用户点通知永远落到「停止」分支，这一轮再也开不起来（实测踩过）。
+        if (state != VoiceState.Idle) {
+            Timber.w("会话状态残留（$state），引擎已空闲，按空闲继续")
+            state = VoiceState.Idle
+            notifyState()
         }
         // 上一轮还没落完的结果先插进去，别被新记录覆盖。
         flushPending(force = true)
@@ -288,6 +357,8 @@ object VoiceSession : VoiceEngine.Listener {
         preview = null
         // 新一轮从面板开始，别继承上一轮「通知栏停的」那个意图。
         stopSource = VoiceStopSource.Panel
+        // 这一轮是谁开的。没有输入法时终稿只能复制，见 [VoiceDelivery.resolve]。
+        captureHost = svc.applicationContext
 
         inMemoryRetryId = null
         micBlocked = null
@@ -296,15 +367,55 @@ object VoiceSession : VoiceEngine.Listener {
         // （没权限 / 系统总开关关了）：别的应用正在录并不等于我们录不到，
         // 普通应用之间还看界面优先级，贸然拦下来会挡住本来能用的场景。
         val probe = MicStatus.probeBeforeStart(svc)
+        pendingProbe = probe
         if (probe.reason == MicStatus.Reason.PermissionDenied || probe.reason == MicStatus.Reason.MicMuted) {
             micBlocked = probe.reason
             state = VoiceState.Idle
             notifyState()
+            pendingProbe = null
             activeListeners().forEach { it.onVoiceNotice(probe.reason!!.message) }
-            return
+            return false
         }
 
+        // 先把前台服务拉起来，**开录放到它真的进前台之后**（[onForegroundReady]）。
+        //
+        // `startForegroundService` 是异步的：在这里紧接着 startRecording 时
+        // 进程还没进前台，麦克风会被按「后台应用」拒掉。从通知栏开录正是这种时序。
+        pendingStart = svc
+        // 兜底：服务要是根本没起来（被系统拒、进程刚被杀），pending 会永远挂着，
+        // 常驻通知就再也不出现（isCapturing 恒为 true），用户以为功能坏了。
+        // 到点还没等到 onForegroundReady 就当这一轮没开始过。
+        main.postDelayed(startWatchdog, START_TIMEOUT_MS)
         VoiceCaptureService.start(svc)
+        return true
+    }
+
+    /** 等前台服务的上限。正常启动是几十毫秒，1.5 秒还没来就是没来。 */
+    private val startWatchdog =
+        Runnable {
+            if (pendingStart == null) return@Runnable
+            Timber.w("前台服务迟迟没就绪，放弃这一轮")
+            pendingStart = null
+            pendingProbe = null
+            finishCapture(captureHost)
+            state = VoiceState.Idle
+            notifyState()
+        }
+
+    /**
+     * 前台服务已经拿到前台状态——现在才真正开录。
+     *
+     * 由 [VoiceCaptureService] 在 `startForeground()` 之后调用。
+     * 从面板点麦克风时它是同步紧跟的；从通知栏点时中间隔着一次服务启动，
+     * 这一步就是那条链路的落点。
+     *
+     * 没有待开录的请求时是空操作（服务被迟到/重复地拉起不会多录一轮）。
+     */
+    fun onForegroundReady() {
+        val svc = pendingStart ?: return
+        pendingStart = null
+        main.removeCallbacks(startWatchdog)
+        if (state != VoiceState.Idle) return
         if (!VoiceEngine.startRecording(svc)) {
             // 麦克风没起来：前台服务也要一起收掉，否则通知栏会留下一条
             // 没人负责关的「正在聆听」（这就是之前那个 bug 的来源之一）。
@@ -319,6 +430,7 @@ object VoiceSession : VoiceEngine.Listener {
         asrDegraded = VoiceEngine.mode == VoiceEngine.Mode.Offline
         asrNotice = if (asrDegraded) "网络没连上" else ""
         // 别人已经在录，而且我们还没被静音：现在还能用，但值得先提醒一句。
+        val probe = pendingProbe ?: MicStatus.probeBeforeStart(svc)
         if (probe.others > 0) {
             activeListeners().forEach {
                 it.onVoiceNotice(
@@ -341,15 +453,29 @@ object VoiceSession : VoiceEngine.Listener {
      *               **必须在这一刻记下来**：点「完成」时只有录音，文字还要等几秒。
      */
     fun stop(source: VoiceStopSource = VoiceStopSource.Panel) {
-        val svc = service ?: return
+        // 这里**不能**要求 service 非空：从通知栏开的那一轮，键盘往往没展开，
+        // 输入法服务也就不存在。录音是引擎的事，收尾用的是 [captureHost]。
+        val ctx = service ?: captureHost
         if (state != VoiceState.Recording) return
         stopSource = source
+        if (ctx == null) {
+            // 既没有输入法也没有本轮上下文，但状态还写着「录音中」：
+            // 这是上一轮中途失败留下的脏状态（前台服务没起来 / 进程被重建）。
+            // 引擎要真在录就把它停掉，然后把状态摆正——否则用户再点通知，
+            // 会一直落到「停止」分支，永远开不了新的一轮（实测踩过）。
+            Timber.w("停止请求没有上下文，按脏状态处理")
+            VoiceEngine.cancel()
+            state = VoiceState.Idle
+            lastPartial = ""
+            notifyState()
+            return
+        }
         // 以引擎为准：面板显示在录，但引擎可能已经自己收场了（出错后 finishWithError
         // 已经把 isRecording 置 false）。这时 stopRecording() 会在开了守卫后直接返回，
         // 超时兜底也就挂不上，状态会永远停在 Thinking。直接收尾回空闲。
         if (!VoiceEngine.isRecording) {
             VoiceEngine.cancel()
-            finishCapture(svc)
+            finishCapture(ctx)
             state = VoiceState.Idle
             lastPartial = ""
             notifyState()
@@ -362,13 +488,16 @@ object VoiceSession : VoiceEngine.Listener {
         DictationAudioMute.release()
         // 前台服务的意义只是「让我们有资格拿麦克风」；音频已经落盘，
         // 剩下的等终稿不需要它了。早点停掉，通知栏那条也就跟着消失。
-        VoiceCaptureService.stop(svc)
+        VoiceCaptureService.stop(ctx)
     }
 
     /** 直接丢弃这一轮（通知栏「取消」/ 输入法销毁）。 */
     fun cancel() {
         VoiceEngine.cancel()
-        finishCapture(service)
+        // 还没开录就被取消（例如服务没起来）：pending 状态必须一起清掉。
+        pendingStart = null
+        pendingProbe = null
+        finishCapture(service ?: captureHost)
         state = VoiceState.Idle
         lastPartial = ""
         asrDegraded = false
@@ -385,12 +514,27 @@ object VoiceSession : VoiceEngine.Listener {
     /**
      * 收掉麦克风那条前台服务。**所有结束路径的最后一步都走这里**，
      * 保证不会出现「会话已经空闲、服务还挂着」的状态。
+     *
+     * @param ctx 输入法服务或这一轮的应用上下文；两者都没有时只能靠 [captureHost]。
      */
-    private fun finishCapture(svc: TrimeInputMethodService?) {
+    private fun finishCapture(ctx: Context?) {
         // 音量归零必须在这里恢复：这是**唯一**一条所有结束路径都经过的出口。
         // 漏掉任何一条，用户的手机就会一直静音——比背景音吵难受得多。
         DictationAudioMute.release()
-        svc?.let { VoiceCaptureService.stop(it) }
+        val host = ctx ?: captureHost
+        host?.let { VoiceCaptureService.stop(it) }
+        // 这一轮彻底结束了。留着上下文只会让下一次 `stop()` 找错落点，
+        // 留着 pendingStart 则会让常驻通知被永久压住（isCapturing 恒为 true）。
+        //
+        // **必须先清再 ensure**：ensure 里用 isCapturing() 判断「该不该让位」，
+        // 顺序反了它就会以为还在录，把常驻通知继续压着——实测录完一条之后
+        // 通知栏里那个入口就再也没回来。
+        captureHost = null
+        pendingStart = null
+        pendingProbe = null
+        // 「正在聆听」收走了，把通知栏那个常驻入口挂回来——否则录完这一条，
+        // 用户想接着录第二条又得先展开键盘。
+        host?.let { runCatching { VoiceResidentService.ensure(it) } }
     }
 
     // ── VoiceEngine 回调（引擎保证在主线程）────────────────────────────
@@ -409,6 +553,9 @@ object VoiceSession : VoiceEngine.Listener {
 
     override fun onFinal(text: String) {
         val svc = service
+        // 收尾要用「这一轮是谁开的」：从通知栏录的那一轮，键盘没展开、
+        // 输入法服务不存在，但结果仍然要落到剪贴板上，不能像以前那样直接丢掉。
+        val host = svc ?: captureHost
         lastPartial = ""
         state = VoiceState.Idle
         asrDegraded = false
@@ -418,18 +565,18 @@ object VoiceSession : VoiceEngine.Listener {
         // 以前只有 stop() / cancel() 会收，而引擎自己走完（终稿、出错、超时兜底）
         // 时没人管，于是麦克风前台服务一直挂着、通知栏那条「正在聆听」再也不走。
         // 用户看到的正是「明明没在听了，下拉还写着正在聆听」。
-        finishCapture(svc)
+        finishCapture(host)
         notifyState()
 
-        if (svc == null) {
-            Timber.w("听写终稿到达时输入法已销毁，丢弃 ${text.length} 字")
+        if (host == null) {
+            Timber.w("听写终稿到达时既没有输入法也没有本轮上下文，丢弃 ${text.length} 字")
             return
         }
         if (text.isBlank()) return
         // 替换词和标点已经在 VoiceEngine.finish 里处理过，这里只负责落点。
         // 注意：**文字和音频此时已经写进历史**（VoiceEngine.archive），
         // 下面无论插入还是复制，都不影响那条记录。
-        deliver(text, stopSource)
+        deliver(text, stopSource, host)
     }
 
     override fun onError(message: String) {
@@ -439,7 +586,7 @@ object VoiceSession : VoiceEngine.Listener {
         micBlocked = null
         asrNotice = ""
         // 出错同样是「这一轮结束了」：前台服务不该比录音活得久。
-        finishCapture(service)
+        finishCapture(service ?: captureHost)
         notifyState()
         // 这一轮如果存下了音频，把「重试」入口递到界面上——不用用户去历史页翻。
         val failed = VoiceEngine.failedEntryId
@@ -735,8 +882,16 @@ object VoiceSession : VoiceEngine.Listener {
     private fun deliver(
         text: String,
         source: VoiceStopSource,
+        host: Context,
     ) {
-        val svc = service ?: return
+        val svc = service
+        // 没有输入法 = 没有任何输入框可插（键盘根本没展开），只能复制。
+        // 这与 [VoiceDelivery.resolve] 里「targetReady=false → Copy」是同一条结论，
+        // 只是这里连「问一句目标在不在」的对象都没有。
+        if (svc == null) {
+            copyToClipboard(host, text)
+            return
+        }
         if (source == VoiceStopSource.Panel && svc.currentComposingText.isNotEmpty()) {
             val firstPending = pending.isEmpty()
             pending.append(text)
@@ -748,7 +903,7 @@ object VoiceSession : VoiceEngine.Listener {
         }
         when (VoiceDelivery.resolve(source, svc.isVoiceTargetReady())) {
             VoiceDelivery.Insert -> commit(text, svc)
-            VoiceDelivery.Copy -> copyToClipboard(svc, text)
+            VoiceDelivery.Copy -> copyToClipboard(host, text)
         }
     }
 
@@ -762,21 +917,23 @@ object VoiceSession : VoiceEngine.Listener {
      * 注意剪贴板会**覆盖**用户原来的内容——这是「复制」的固有代价，不改。
      */
     private fun copyToClipboard(
-        svc: TrimeInputMethodService,
+        ctx: Context,
         text: String,
     ) {
         val ok =
             runCatching {
-                val cm = svc.getSystemService(android.content.Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+                val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
                 cm.setPrimaryClip(android.content.ClipData.newPlainText("JackVoice", text))
             }.isSuccess
         if (!ok) {
             Timber.w("写剪贴板失败，${text.length} 字只留在历史里")
-            toast("没能复制，文字已存进历史记录")
+            toast("没能复制，文字已存进历史记录", ctx)
             return
         }
-        toast("已复制到剪贴板，去粘贴")
-        runCatching { VoiceCaptureService.notifyCopied(svc, text) }
+        toast("已复制到剪贴板，去粘贴", ctx)
+        // 回执走**应用上下文**：从通知栏录的那一轮输入法服务不存在，
+        // 用服务去发通知会直接空指针，用户就不知道到底复制没复制。
+        runCatching { VoiceCaptureService.notifyCopied(ctx.applicationContext, text) }
     }
 
     /**
@@ -829,8 +986,13 @@ object VoiceSession : VoiceEngine.Listener {
         if (Looper.myLooper() == Looper.getMainLooper()) block() else main.post(block)
     }
 
-    private fun toast(message: String) {
-        val svc = service ?: return
-        runCatching { Toast.makeText(svc, message, Toast.LENGTH_SHORT).show() }
+    private fun toast(
+        message: String,
+        ctx: Context? = null,
+    ) {
+        // 优先用这一轮真正干活的上下文：从通知栏开的那一轮没有输入法服务，
+        // 只用 `service` 会静默什么都不弹，用户以为没复制。
+        val target = ctx ?: service ?: captureHost ?: return
+        runCatching { Toast.makeText(target, message, Toast.LENGTH_SHORT).show() }
     }
 }

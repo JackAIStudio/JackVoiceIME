@@ -267,6 +267,15 @@
     <string name="voice_copied_hint">想用这段文字，去输入框长按粘贴</string>
     <string name="voice_copied_channel_name">听写完成</string>
     <string name="voice_copied_channel_desc">从通知栏结束听写后，提示文字已经复制好</string>
+    <string name="voice_resident_title">点一下就开始说话</string>
+    <string name="voice_resident_hint">不用展开键盘，下拉点这里就能录音；说完再点一下</string>
+    <string name="voice_resident_action">开始说话</string>
+    <string name="voice_resident_open">打开 JackVoice</string>
+    <string name="voice_resident_channel_name">听写入口（常驻）</string>
+    <string name="voice_resident_channel_desc">在通知栏常驻一个语音入口，不展开键盘也能开始录音</string>
+    <string name="voice_resident_setting_title">通知栏常驻听写入口</string>
+    <string name="voice_resident_setting_hint_on">下拉通知栏点一下就开录，不用先展开键盘</string>
+    <string name="voice_resident_setting_hint_off">关掉后只能在语音面板里点麦克风开始录音</string>
     <string name="voice_permission_title">需要麦克风权限</string>
     <string name="voice_permission_message">语音键盘要把你说的话转成文字，需要录音权限。授权后录音开关才会真正生效。</string>
     <string name="candidate_loading_more">Loading…</string>

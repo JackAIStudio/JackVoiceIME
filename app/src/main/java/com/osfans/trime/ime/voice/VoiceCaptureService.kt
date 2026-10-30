@@ -67,7 +67,9 @@ class VoiceCaptureService : Service() {
         when (intent?.action) {
             ACTION_CANCEL -> {
                 // 走会话而不是直接掐引擎：面板/顶栏的状态要跟着回到空闲。
-                if (VoiceSession.isBound) VoiceSession.cancel() else VoiceEngine.cancel()
+                // **不看 isBound**：从通知栏起的那一轮键盘可能没展开、输入法服务不存在，
+                // 但会话照样在（它自己记着这一轮的上下文），照样要能取消。
+                VoiceSession.cancel()
                 stopSelf()
                 return START_NOT_STICKY
             }
@@ -77,11 +79,11 @@ class VoiceCaptureService : Service() {
                 //
                 // 这里**必须标成来自通知栏**：用户没在看键盘，多半只是记一下，
                 // 终稿回来会走剪贴板而不是插进光标。录音和文字照旧进历史。
-                if (VoiceSession.isBound) {
-                    VoiceSession.stop(VoiceStopSource.Notification)
-                } else {
-                    VoiceEngine.stopRecording()
-                }
+                //
+                // 同理**不看 isBound**：没有输入法服务时 VoiceSession 用这一轮记下的
+                // 应用上下文收尾。以前这里退到 `VoiceEngine.stopRecording()`，
+                // 而那条路没有会话监听者——终稿回来没人接，文字就只剩历史里那一条。
+                VoiceSession.stop(VoiceStopSource.Notification)
                 stopSelf()
                 return START_NOT_STICKY
             }
@@ -98,10 +100,19 @@ class VoiceCaptureService : Service() {
         // 那是**非致命**的：录音本体在 VoiceEngine 里，能录就录，录不了会走错误回调。
         return try {
             goForeground()
+            // 前台状态**已经拿到**，现在才是开录的合法时机。
+            //
+            // 为什么不能由调用方先开录再起服务：`startForegroundService` 是异步的，
+            // `VoiceSession.start()` 紧接着调 `VoiceEngine.startRecording()` 时
+            // 进程还没进前台，麦克风会被系统按「后台应用」拒掉——从通知栏开录
+            // （没有键盘、App 在后台）正是这个时序，实测点了没反应。
+            VoiceSession.onForegroundReady()
             START_NOT_STICKY
         } catch (e: Exception) {
             Timber.w(e, "麦克风前台服务启动被拒，继续尝试直接录音")
-            runCatching { stopSelf() }
+            // 服务没能进前台：照样试着开录。MIUI 上这条也常被拒，
+            // 但录音本体在 VoiceEngine 里，能录就录。
+            VoiceSession.onForegroundReady()
             START_NOT_STICKY
         }
     }
@@ -118,6 +129,9 @@ class VoiceCaptureService : Service() {
                 0
             },
         )
+        // 通知栏同时只留一条 JackVoice：真开始录了，那条「点一下就开始说话」就该让位，
+        // 否则下拉里会并排两条，用户不知道该点哪个（点错那个还会把录音停掉）。
+        runCatching { VoiceResidentService.stop(this) }
     }
 
     private fun buildNotification(

@@ -396,6 +396,54 @@ VoiceCaptureService（前台，只为拿麦克风）
 - `VoiceSession.unbind()` 只在输入法服务销毁时调用；面板、键盘窗口的 detach
   与它无关。`VoiceEngine.isWaitingFinal` 让服务重建后还能恢复「处理中」。
 
+## 通知栏常驻入口：不展开键盘也能开录
+
+以前只有录音时才有通知，而它的存在前提是「已经在录了」——键盘收着的时候
+**完全没有入口**，想说话必须先点开某个输入框。现在通知栏里常驻一条
+「点一下就开始说话」：
+
+```
+VoiceResidentService（specialUse 前台服务，只在空闲时挂着）
+       └── 通知：「点一下就开始说话」
+             └── 点卡片 → VoiceQuickStartActivity（透明跳板）
+                   └── VoiceResidentService.toggleDictation()
+                         ├── 空闲 → VoiceSession.start() → 麦克风前台服务
+                         └── 录音中 → VoiceSession.stop(Notification) → 剪贴板
+```
+
+**任何时刻通知栏里只有一条 JackVoice**：开始录音时常驻那条让位给「正在聆听」，
+录完自动挂回来（`VoiceSession.finishCapture` 里 `ensure`）。
+
+### 三个坑，都实测过
+
+1. **点击目标不能用 `startService`**。`contentIntent` 指向服务时，点卡片只会把
+   服务重新提前台，`onStartCommand` 收到的还是上一次的 intent，`ACTION_START`
+   根本送不到——点了完全没反应。
+2. **也不能用 `getBroadcast`**。改成广播后，`dumpsys activity broadcasts` 里
+   连记录都没有（只有 adb 手工发的那几条能到）。MIUI 只把「点通知 = 开个界面」
+   当正经的点击意图。
+3. **跳板 Activity 必须 `exported=true`**。系统发通知的 PendingIntent 以 SystemUI
+   身份落地，`exported=false` 会被 `Permission Denial` 直接拒掉。它自己验
+   `ACTION_QUICK_START` + 调用方来防冒用。
+
+### 开录必须等前台状态到手
+
+`startForegroundService` 是**异步**的。原来的写法是「起服务 → 紧接着
+`startRecording()`」，键盘展开时因为输入法本来就在前台，看不出问题；
+从通知栏开录时进程在后台，那一刻拿不到麦克风，`AudioRecord` 直接被拒。
+
+现在拆成两步：`VoiceSession.start()` 只负责拉起服务并记下 `pendingStart`，
+真正的 `VoiceEngine.startRecording()` 在 `VoiceCaptureService` 的
+`startForeground()` 之后由 `onForegroundReady()` 触发。1.5 秒没等到就放弃
+（`startWatchdog`），免得 `pendingStart` 永远挂着把常驻通知压死。
+
+### 会话状态要能自愈
+
+进程被重建、上一轮中途失败之后，`state` 可能停在 `Recording` 而引擎早就空了。
+表现是「点通知第一下没反应，第二下才开始录」——第一下走了「停止」分支。
+`VoiceSession.reconcileIfStale()` 按引擎为准把状态摆正，`toggleDictation`
+每次点击前先调一次。
+
 ## 两个必须知道的坑
 
 ### ① 录音放行看的是 AppOps，不是权限清单

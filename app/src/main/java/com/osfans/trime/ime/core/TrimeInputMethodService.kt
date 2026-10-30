@@ -51,6 +51,7 @@ import com.osfans.trime.data.theme.ThemeScope
 import com.osfans.trime.ime.composition.CandidatesView
 import com.osfans.trime.ime.keyboard.InputFeedbackManager
 import com.osfans.trime.ime.voice.EnglishCompleter
+import com.osfans.trime.ime.voice.VoiceResidentService
 import com.osfans.trime.ime.voice.VoiceSession
 import com.osfans.trime.receiver.RimeIntentReceiver
 import com.osfans.trime.util.any
@@ -261,6 +262,10 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
         // 听写会话挂在服务上，不挂在语音面板窗口上：切模块、面板 detach 都不影响它。
         VoiceSession.bind(this)
         registerReceiver()
+        // 输入法被系统拉起 = 用户随时可能开始说话。这时候把通知栏那个入口挂上，
+        // 下次键盘收着时也能从下拉里直接开录。
+        runCatching { VoiceResidentService.ensure(this) }
+            .onFailure { Timber.w(it, "拉起常驻听写通知失败") }
         super.onCreate()
         Timber.d("onCreate")
         decorView = window.window!!.decorView
@@ -399,6 +404,10 @@ open class TrimeInputMethodService : LifecycleInputMethodService() {
         ThemeManager.removeOnChangedListener(onThemeChangeListener)
         ColorManager.removeOnChangedListener(onColorChangeListener)
         AppearanceManager.removeOnChangedListener(onAppearanceChangeListener)
+        // 常驻通知那条入口跟着输入法活：输入法都没了还挂着它，
+        // 点下去也没有会话可用（透明跳板拉起的进程里没人接结果）。
+        // 收掉，等下次输入法被拉起时再挂回去（见 onCreate）。
+        runCatching { VoiceResidentService.stop(this) }
         super.onDestroy()
         unregisterReceiver(rimeIntentReceiver)
         RimeDaemon.destroySession(javaClass.name)

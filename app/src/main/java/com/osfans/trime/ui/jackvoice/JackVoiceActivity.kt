@@ -47,6 +47,7 @@ import com.osfans.trime.ime.voice.VoiceDictionary
 import com.osfans.trime.ime.voice.VoiceFailure
 import com.osfans.trime.ime.voice.VoiceHistory
 import com.osfans.trime.ime.voice.VoicePrefs
+import com.osfans.trime.ime.voice.VoiceResidentService
 import com.osfans.trime.ime.voice.VoiceStats
 import com.osfans.trime.ime.voice.VoiceTranscriber
 import com.osfans.trime.ui.main.MainActivity
@@ -166,6 +167,9 @@ class JackVoiceActivity :
                 GlossarySyncManager.onForeground(this@JackVoiceActivity)
             }
         }
+        // 用户在这里改过 API Key / 引擎 / 开关，回到前台时重新对一次条件：
+        // 之前因为「缺 Key / 模型没下好」而没挂出来的常驻通知，现在该出来了。
+        runCatching { VoiceResidentService.ensure(this) }
     }
 
     override fun onPause() {
@@ -1389,6 +1393,30 @@ class JackVoiceActivity :
                 trailing = VoicePrefs.muteMode(this).label,
                 chevron = true,
             ) { chooseMuteMode() },
+        )
+        voice.addView(Jv.divider(this))
+        val resident = VoicePrefs.residentEnabled(this)
+        voice.addView(
+            Jv.row(
+                this,
+                getString(R.string.voice_resident_setting_title),
+                if (resident) {
+                    getString(R.string.voice_resident_setting_hint_on)
+                } else {
+                    getString(R.string.voice_resident_setting_hint_off)
+                },
+                trailing = if (resident) "开" else "关",
+            ) {
+                VoicePrefs.setResidentEnabled(this, !resident)
+                // 立刻生效：开关一拨，通知栏里那条就跟着出现 / 消失，
+                // 不用等下一次录音或重启输入法。
+                if (resident) {
+                    VoiceResidentService.stop(this)
+                } else {
+                    VoiceResidentService.ensure(this)
+                }
+                select(Tab.Settings)
+            },
         )
         voice.addView(Jv.divider(this))
         val boostingTableId = VoicePrefs.boostingTableId(this)

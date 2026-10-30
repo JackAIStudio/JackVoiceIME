@@ -40,6 +40,21 @@ object VoicePrefs {
     const val KEY_GLOSSARY_LAST_CONFLICTS = "voice_glossary_last_conflicts"
     const val KEY_GLOSSARY_AUTO_SYNC = "voice_glossary_auto_sync"
 
+    /**
+     * 通知栏常驻一条「点一下就开始说话」的入口。
+     *
+     * 默认**开**。这个功能的意义就是少一步：以前必须展开键盘、进语音面板才能开录，
+     * 键盘收着的时候完全没有入口。
+     */
+    const val KEY_RESIDENT_NOTIFICATION = "voice_resident_notification"
+
+    fun residentEnabled(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_RESIDENT_NOTIFICATION, true)
+
+    fun setResidentEnabled(
+        ctx: Context,
+        enabled: Boolean,
+    ) = prefs(ctx).edit { putBoolean(KEY_RESIDENT_NOTIFICATION, enabled) }
+
     fun apiKey(ctx: Context): String = prefs(ctx).getString(KEY_API_KEY, "").orEmpty().trim()
 
     fun resourceId(ctx: Context): String = prefs(ctx).getString(KEY_RESOURCE_ID, "").orEmpty().trim()

@@ -188,6 +188,30 @@ object VoiceEngine {
     val hasAudio: Boolean get() = audio != null || entryId.isNotEmpty()
 
     /**
+     * 现在点一下能不能真的录起来。
+     *
+     * 给「常驻通知该不该挂出来」用：挂一条点了没反应的通知比不挂更糟。
+     * 这里**不碰麦克风**（只查权限与配置），所以可以随时调，不会抢录音或占用硬件。
+     *
+     * 与 [startRecording] 开头的几个守卫一一对应，别只在一边加条件：
+     * 那边拦下来会走 `onError`，而通知栏是没有地方显示这句错误的。
+     */
+    fun canStartCapture(ctx: Context): Boolean {
+        if (isRecording || isWaitingFinal) return false
+
+        // 麦克风权限 / AppOps / 系统总开关。注意只拦「确定拿不到」的那两种，
+        // 与 VoiceSession.start() 的判定保持一致（别人正在录不等于我们录不到）。
+        val probe = MicStatus.probeBeforeStart(ctx).reason
+        if (probe == MicStatus.Reason.PermissionDenied || probe == MicStatus.Reason.MicMuted) return false
+
+        return when (VoicePrefs.engine(ctx)) {
+            AsrEngine.Cloud -> VoicePrefs.apiKey(ctx).isNotBlank()
+            // 本地模型没下载完时 startRecording 会直接失败，通知栏没法解释这件事。
+            AsrEngine.Local -> LocalModelManager.isReady(ctx)
+        }
+    }
+
+    /**
      * 调用前必须已经 `startForeground(...)`，否则麦克风仍会被系统拒绝。
      *
      * @return 麦克风真的起来了才为 true；起不来时错误已经通过 listener 报出去。

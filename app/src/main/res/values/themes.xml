@@ -15,4 +15,18 @@ SPDX-License-Identifier: GPL-3.0-or-later
     </style>
 
     <style name="Theme.DialogTheme" parent="@android:style/Theme.DeviceDefault.Light.Dialog" />
+
+    <!--
+        通知栏「开始说话」的透明跳板（见 VoiceQuickStartActivity）。
+
+        必须真的透明、且不带动画：它的全部意义是把应用带到前台一下，
+        用户不该看见任何界面。用系统透明主题而不是 AppCompat，
+        免得多出一层窗口装饰和转场。
+    -->
+    <style name="Theme.Transparent" parent="@android:style/Theme.Translucent.NoTitleBar">
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:backgroundDimEnabled">false</item>
+    </style>
 </resources>

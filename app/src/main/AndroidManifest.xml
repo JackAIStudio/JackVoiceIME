@@ -16,6 +16,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- 通知栏常驻入口：specialUse 型前台服务（见 VoiceResidentService 注释） -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <application
         android:name="com.osfans.trime.TrimeApplication"
@@ -115,6 +117,21 @@ SPDX-License-Identifier: GPL-3.0-or-later
             android:exported="false"
             android:label="@string/trime_app_name" />
 
+        <!--
+            通知栏「开始说话」的透明跳板（见 VoiceQuickStartActivity）。
+
+            点通知必须落到一个 Activity 上：实测 MIUI 上 startService / 广播两种
+            点击目标都点不动（前者动作送不到，后者干脆没反应）。
+            这个界面透明、无动画、不进最近任务，进 onCreate 就 finish。
+        -->
+        <activity
+            android:name=".ime.voice.VoiceQuickStartActivity"
+            android:excludeFromRecents="true"
+            android:exported="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.Transparent" />
+
         <!-- Using an activity alias to disable/enable the app icon in the launcher -->
         <activity-alias
             android:name="com.osfans.trime.MainLauncherAlias"
@@ -136,5 +153,42 @@ SPDX-License-Identifier: GPL-3.0-or-later
             android:name="com.osfans.trime.ime.voice.VoiceCaptureService"
             android:exported="false"
             android:foregroundServiceType="microphone" />
+
+        <!--
+            通知栏常驻入口：不点输入框也能开录。
+
+            空闲时才挂着，开始录音就撤掉（见 VoiceResidentService 注释）。
+            用 specialUse 而不是 microphone：空闲时我们没有「正在用麦克风」这件事，
+            也不该要这个资格——MIUI 上 targetSdk 37 的输入法进程起 microphone 型
+            前台服务会被判「不在资格状态」直接抛 SecurityException。
+        -->
+        <service
+            android:name="com.osfans.trime.ime.voice.VoiceResidentService"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="在通知栏常驻语音听写入口，点一下开始录音" />
+        </service>
+
+        <!--
+            常驻通知的点击入口 + 开机补挂。
+
+            `voice.START` 必须写进 intent-filter：通知的 PendingIntent 是广播，
+            系统按 action 匹配 manifest 里声明过的 receiver。漏了这条，
+            点通知会**完全没反应**（实测踩过：PendingIntent 建对了、服务也在，
+            就是点了不动）。
+        -->
+        <receiver
+            android:name="com.osfans.trime.ime.voice.VoiceResidentReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.osfans.trime.voice.START" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
     </application>
 </manifest>
