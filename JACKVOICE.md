@@ -509,5 +509,5 @@ node lexicon/export-assets.mjs     # 输出与仓库文件字节一致，不会�
 
 ## 与上一代方案的关系
 
-`JackAndroidVoice` 是上一代方案（Xime 输入法插件 + 独立语音 App），**已归档**。
+本项目的上一代方案（Xime 输入法插件 + 独立语音 App）**已归档**。
 它的识别协议、热词、替换规则是这一版的基础，词库源头已搬进本仓 `lexicon/`。
