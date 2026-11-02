@@ -2683,7 +2683,6 @@ All notable changes to this project will be documented in this file.
 - *(travis)* Use default build tools
 - Use direct download link for last release
 - Add rimerc tip to release note fix #349
-- Add sponsor for trime[ci skip]
 - Update contributor of abay[ci skip]
 - Lower case of rimerc[ci skip]
 - Add new contributor[ci skip]
@@ -2707,7 +2706,6 @@ All notable changes to this project will be documented in this file.
 - Open qq group if qq installed
 - Store theme and color in pref
 - 增加重做、重做、分享等功能（>=Android6.0）
-- 添加捐贈鏈接
 - 中文模式下的字母標籤自動大寫
 - 臨時大寫改變Shift顏色
 - 更新日誌菜單
@@ -2909,7 +2907,6 @@ All notable changes to this project will be documented in this file.
 - 調整拖動條佈局
 - 更新通知欄圖標
 - 不處理Menu鍵
-- Add alipay png in github
 - *(cmake)* Copy header files only
 - 刪除搜狗、靑紅以加速部署
 - 移除自定義字符串
