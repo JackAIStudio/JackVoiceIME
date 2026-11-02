@@ -6,6 +6,7 @@ name: Pull Request
 
 on:
   pull_request:
+    branches: [main]
     types:
       - opened
       - reopened
@@ -16,6 +17,11 @@ env:
   CI_NAME: Pull Request CI
 jobs:
   build:
+    # PR 来自本仓分支或本仓的直接 contributor 才跑；外部 fork 的 PR
+    # 由维护者手动加标签 approve-ci 后才构建，避免陌生 PR 白刷 Actions 额度
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository ||
+      contains(github.event.pull_request.labels.*.name, 'approve-ci')
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

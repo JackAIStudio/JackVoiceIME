@@ -473,15 +473,13 @@ git clone --recursive <this-repo>          # librime / OpenCC / lua / snappy 是
 ./gradlew assembleDebug
 ```
 
-本机适配过两处（都已在仓库里）：`minSdk = 24`（NDK 28 下 lua 的 `fseeko` 需要 API 24）、
+两处平台适配已落在仓库里：`minSdk = 24`（NDK 28 下 lua 的 `fseeko` 需要 API 24）、
 `settings.gradle.kts` 加了阿里云镜像。
 
-### ⚠️ 项目目录不能在 iCloud 里（**本仓已搬走**）
+### ⚠️ 项目目录不要放在 iCloud 同步目录里
 
-本仓原本放在 `~/Documents/Playground/Trime`，而 `~/Documents` 被「桌面与文档」
-iCloud 同步托管（`com.apple.file-provider-domain-id:
-com.apple.CloudDocs.iCloudDriveFileProvider/…`）。iCloud 会为它跟不上的文件生成
-`xxx 2.kt` 这类**冲突副本**，连 `.git/index` 都被生成过 4 份。后果：
+macOS 的「桌面与文档」iCloud 同步会为跟不上的文件生成 `xxx 2.kt` 这类**冲突副本**，
+连 `.git/index` 都可能被生成多份。后果：
 
 ```
 Cannot access output property 'destinationDirectory' … Failed to create MD5 hash for file: …/InputView 2.kt
@@ -490,9 +488,7 @@ Resource deadlock avoided                        # 连 mv / rm 都会被锁住
 ```
 
 构建过程中会持续产生新副本，所以「清理 → 构建」循环也救不回来（实测连试 10 次全败）。
-
-**本仓现已移到 `~/Projects/JackVoiceIME`**，不在 iCloud 里，构建连做多次零失败、零副本。
-`~/Documents/Playground/` 下其它仓同样受影响，要动它们建议一并搬出。
+把仓库放在 iCloud 之外的目录即可。
 
 ## 词库
 
@@ -511,9 +507,7 @@ node lexicon/export-assets.mjs     # 输出与仓库文件字节一致，不会�
 本地执行，但热词和替换词会通过火山 TOS 的 `glossary.json` 在手机和 Mac 之间自动
 双向同步：主界面或语音面板打开时拉取，本机改动后自动推送，冲突按修改时间新者胜。
 
-## 与 JackAndroidVoice 的关系
+## 与上一代方案的关系
 
-`JackAIStudio/JackAndroidVoice` 是上一代方案（Xime 输入法插件 + 独立语音 App），
-**已归档**。它的识别协议、热词、替换规则是这一版的基础，词库源头已搬进本仓 `lexicon/`。
-那里的 `plugin/` 和 `app/` 只在你还想用「曦码输入法 + 语音插件」或「悬浮球 + 无障碍注入」
-那两种形态时才有用。
+`JackAndroidVoice` 是上一代方案（Xime 输入法插件 + 独立语音 App），**已归档**。
+它的识别协议、热词、替换规则是这一版的基础，词库源头已搬进本仓 `lexicon/`。

@@ -12,6 +12,8 @@ env:
   CI_NAME: Release CI
 jobs:
   build:
+    # 只在主仓库出包；fork 无权往本仓发 Release，也就没有跑的必要
+    if: ${{ github.repository == 'JackAIStudio/JackVoiceIME' }}
     runs-on: ubuntu-26.04
     steps:
       - name: Checkout

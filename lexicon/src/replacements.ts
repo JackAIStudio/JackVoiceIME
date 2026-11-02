@@ -1,5 +1,4 @@
-// 从 JackVoice 桌面版 replacements.json 导入（76 条）
-// 源: ~/Library/Application Support/com.jackvoice.shared/replacements.json
+// 默认替换词表（76 条）
 // 语义: from → to。from==to 视为「短语锁」，保护该写法不被其它规则误伤。
 // 重新生成: node lexicon/import-desktop.mjs && node lexicon/export-assets.mjs
 

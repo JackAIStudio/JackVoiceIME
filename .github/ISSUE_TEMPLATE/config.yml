@@ -2,9 +2,12 @@
 #
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-blank_issues_enabled: false
+blank_issues_enabled: true
 
 contact_links:
-  - name: GitHub 讨论区 / GitHub Discussions
-    url: https://github.com/osfans/trime/discussions
-    about: 请在这里提出有关如何使用本输入法的疑问。 / Please ask questions about how to use the input method here.
+  - name: 提问与讨论 / Questions & Discussions
+    url: https://github.com/JackAIStudio/JackVoiceIME/issues
+    about: 使用上的疑问请在这里提 / Please ask usage questions here
+  - name: 上游 Trime / Upstream Trime
+    url: https://github.com/osfans/trime
+    about: 本仓库是 Trime 的 fork，与 Rime/Trime 本身无关的问题请向上游反馈

@@ -4,20 +4,14 @@ SPDX-FileCopyrightText: 2015 - 2024 Rime community
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 
-> ## 📍 这是 JackVoice 的哪个项目？
+> ## 📍 这是什么
 >
-> **手机端唯一交付。** JackVoice 在手机上的全部产品形态就是这一个 App：
-> 自带键盘 + 语音输入，装上它就能说话上屏，不需要再装别的。
+> **JackVoice 的手机端形态。** 自带键盘 + 语音输入，装上它就能说话上屏，
+> 不需要再装别的。
 >
-> | 仓库 | 平台 / 形态 | 状态 |
-> |---|---|---|
-> | **JackVoiceIME**（本仓库） | Android · 输入法（键盘 + 语音一体） | ✅ **手机端唯一现役** |
-> | [JackVoice](https://github.com/JackAIStudio/JackVoice) | macOS · 桌面听写 | ✅ 现役（另一个平台） |
-> | JackAndroidVoice | Android · 独立 App + 悬浮球 | ⛔️ 已停止分发，别用 |
->
-> 本仓库是 [Trime](https://github.com/osfans/trime) 的 fork：相对上游有 43 个自有提交
-> （语音链路、JackVoice 界面、词库同步），且没有落后上游。`trime` 是与上游同步用的
-> remote，日常改动请提交到 `main`。
+> 本仓库是 [Trime](https://github.com/osfans/trime) 的 fork，
+> 相对上游有若干自有提交（语音链路、JackVoice 界面、词库同步）。
+> 日常改动提交到 `main`。
 >
 > 下面保留的是上游 Trime 的原始 README。
 

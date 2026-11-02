@@ -1,5 +1,4 @@
-// 从 JackVoice 桌面版 hotwords.json 导入（59 条）
-// 源: ~/Library/Application Support/com.jackvoice.shared/hotwords.json
+// 默认热词表（59 条）
 // 重新生成: node lexicon/import-desktop.mjs && node lexicon/export-assets.mjs
 
 export const DEFAULT_HOTWORDS: string[] = [

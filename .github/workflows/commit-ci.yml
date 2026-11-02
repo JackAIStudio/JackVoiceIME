@@ -3,12 +3,21 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 name: Commit
-on: [push]
+on:
+  push:
+    branches: [main]
+    # 文档与词库改动不必拉起四个平台的完整构建
+    paths-ignore:
+      - '**.md'
+      - 'lexicon/**'
+      - 'doc/**'
 
 env:
   CI_NAME: Commit CI
 jobs:
   build:
+    # 只在主仓库跑：fork 出来的仓库不消耗本仓的 Actions 额度
+    if: ${{ github.repository == 'JackAIStudio/JackVoiceIME' }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false

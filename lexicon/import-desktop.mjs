@@ -1,15 +1,16 @@
 /**
- * 从桌面版 JackVoice 的共享数据目录导入热词与替换词。
+ * 从外部共享数据目录导入热词与替换词。
  *
- *   读  ~/Library/Application Support/com.jackvoice.shared/hotwords.json
- *   读  ~/Library/Application Support/com.jackvoice.shared/replacements.json
+ *   读  $JACKVOICE_SHARED_DATA_DIR/hotwords.json
+ *   读  $JACKVOICE_SHARED_DATA_DIR/replacements.json
  *   写  lexicon/src/hotwords.ts
  *   写  lexicon/src/replacements.ts
  *
  * 之后仍需跑一次 `node lexicon/export-assets.mjs`，把 .ts 词库导出到
  * app/src/main/assets。
  *
- * 桌面版换了数据目录时，用 JACKVOICE_SHARED_DATA_DIR 覆盖。
+ * 数据目录默认取 macOS 上的 `~/Library/Application Support/com.jackvoice.shared`，
+ * 可用 JACKVOICE_SHARED_DATA_DIR 覆盖。
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';

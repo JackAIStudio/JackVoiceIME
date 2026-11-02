@@ -1,1 +1,1 @@
-Trime, Rime Input Method Engine for Android
+JackVoice — voice-first keyboard. Speak, and it's written.
