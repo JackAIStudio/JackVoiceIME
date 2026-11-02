@@ -6,8 +6,8 @@
  *
  * 手动跑：node lexicon/export-assets.mjs
  *
- * 这两个 .ts 是**唯一源头**（原来放在 JackAndroidVoice 的 plugin/src/data/，
- * 那个仓已归档）。可以从桌面版重新生成：node lexicon/import-desktop.mjs。
+ * 这两个 .ts 是**唯一源头**，`assets/*.json` 都是生成物。
+ * 也可以从外部共享数据目录重新生成：node lexicon/import-desktop.mjs。
  * 改完 .ts 再跑一次本脚本。
  */
 

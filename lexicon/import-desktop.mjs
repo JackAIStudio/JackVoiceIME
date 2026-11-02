@@ -9,8 +9,7 @@
  * 之后仍需跑一次 `node lexicon/export-assets.mjs`，把 .ts 词库导出到
  * app/src/main/assets。
  *
- * 数据目录默认取 macOS 上的 `~/Library/Application Support/com.jackvoice.shared`，
- * 可用 JACKVOICE_SHARED_DATA_DIR 覆盖。
+ * 数据目录由 JACKVOICE_SHARED_DATA_DIR 指定；未设置时取 macOS 默认位置。
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
