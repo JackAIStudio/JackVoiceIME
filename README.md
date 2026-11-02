@@ -21,11 +21,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 Rime IME for Android
 
-![build](https://github.com/osfans/trime/actions/workflows/commit-ci.yml/badge.svg?branch=develop)
 [![License: GPL v3](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![GitHub release](https://img.shields.io/github/release/osfans/trime.svg)](https://github.com/osfans/trime/releases)
-[![F-Droid release](https://img.shields.io/f-droid/v/com.osfans.trime.svg)](https://f-droid.org/packages/com.osfans.trime)
-[![Latest build](https://img.shields.io/github/last-commit/osfans/trime.svg)](http://osfans.github.io/trime/)
 
 English | [简体中文](README_sc.md) | [繁體中文](README_tc.md)
 
@@ -35,17 +31,22 @@ Trime is originally a frontend of open-source [Android Traditional Chinese IME],
 
 [Documentation](https://github.com/osfans/trime/wiki)
 
-## Download
+## Build
 
-- Stable Channel <br>
-  [<img alt='Get it on F-Droid' src='https://fdroid.gitlab.io/artwork/badge/get-it-on.png' height='80px'/>](https://f-droid.org/packages/com.osfans.trime)
-  [<img alt='Google Play Download Now' src='https://play.google.com/intl/en_us/badges/images/generic/en_badge_web_generic.png' height='80px'/>](https://play.google.com/store/apps/details?id=com.osfans.trime)
+No prebuilt packages are published, and this repository does not use GitHub Actions.
+Build it yourself:
 
-- Nightly Channel [Download](https://github.com/osfans/trime/releases/tag/nightly)
+```sh
+git clone --recursive https://github.com/JackAIStudio/JackVoiceIME.git
+cd JackVoiceIME
+./gradlew assembleDebug            # output: app/build/outputs/apk/debug/
+```
 
-- Canary Channel [Download](https://github.com/osfans/trime/actions)
+Requires JDK 21, Android SDK and NDK 28. librime / OpenCC / snappy are submodules,
+so the `--recursive` flag is required.
 
-- Configurations [rimerc](https://github.com/Bambooin/rimerc)
+Note that a plain build still carries the upstream Trime configuration. What this fork
+changes on top of upstream is documented in [JACKVOICE.md](JACKVOICE.md).
 
 ## History
 
@@ -92,7 +93,7 @@ If you cannot or wouldn't like to enable anything, it doesn't matter. Copying wi
 #### 1. Clone this project and fetch all submodules:
 
 ```sh
-git clone git@github.com:osfans/trime.git
+git clone --recursive git@github.com:JackAIStudio/JackVoiceIME.git
 git submodule update --init --recursive
 # use partial clone to save time
 git submodule update --init --recursive --filter=blob:none

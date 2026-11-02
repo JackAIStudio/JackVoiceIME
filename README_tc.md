@@ -6,11 +6,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 # 同文 Android 輸入法平臺
 
-![build](https://github.com/osfans/trime/actions/workflows/commit-ci.yml/badge.svg?branch=develop)
 [![License: GPL v3](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
-[![GitHub release](https://img.shields.io/github/release/osfans/trime.svg)](https://github.com/osfans/trime/releases)
-[![F-Droid release](https://img.shields.io/f-droid/v/com.osfans.trime.svg)](https://f-droid.org/packages/com.osfans.trime)
-[![Latest build](https://img.shields.io/github/last-commit/osfans/trime.svg)](http://osfans.github.io/trime/)
 
 [English](README.md) | [简体中文](README_sc.md) | 繁體中文
 
@@ -20,17 +16,21 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 [查看文檔](https://github.com/osfans/trime/wiki)
 
-## 下載
+## 取得與建置
 
-- 穩定版 <br>
-  [<img alt='Get it on F-Droid' src='https://fdroid.gitlab.io/artwork/badge/get-it-on.png' height='80px'/>](https://f-droid.org/packages/com.osfans.trime)
-  [<img alt='Google Play 立即下載' src='https://play.google.com/intl/en_us/badges/images/generic/zh-tw_badge_web_generic.png' height='80px'/>](https://play.google.com/store/apps/details?id=com.osfans.trime)
+本倉庫不提供預先編譯的安裝包，也不使用 GitHub Actions 自動建置。請自行編譯：
 
-- 每夜版 [點選下載](https://github.com/osfans/trime/releases/tag/nightly)
+```sh
+git clone --recursive https://github.com/JackAIStudio/JackVoiceIME.git
+cd JackVoiceIME
+./gradlew assembleDebug            # 產物在 app/build/outputs/apk/debug/
+```
 
-- 測試版 [點選下載](https://github.com/osfans/trime/actions)
+需要 JDK 21、Android SDK 與 NDK 28。librime / OpenCC / snappy 等都是 submodule，
+必須帶 `--recursive` 複製。
 
-- 配置文件 [rimerc](https://github.com/Bambooin/rimerc)
+以上建置方式產出的仍是**同文輸入法 Trime** 的上游設定。本倉庫相對上游的改動見
+[JACKVOICE.md](JACKVOICE.md)。
 
 ## 沿革
 
@@ -74,7 +74,7 @@ TRIME 是 Tongwen RIME 或是 ThaeRvInputMEthod 的縮寫:
 #### 1. 克隆此專案並拉取所有子模組。
 
 ```sh
-git clone git@github.com:osfans/trime.git
+git clone --recursive git@github.com:JackAIStudio/JackVoiceIME.git
 git submodule update --init --recursive
 # 可以使用部分克隆節省時間
 git submodule update --init --recursive --filter=blob:none

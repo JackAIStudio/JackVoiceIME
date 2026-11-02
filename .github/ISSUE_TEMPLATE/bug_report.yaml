@@ -12,7 +12,7 @@ body:
     id: summary
     attributes:
       label: 摘要 / Summary
-      description: 简要描述遇到的问题。请先测试[每夜版](https://github.com/osfans/trime/releases/tag/nightly)有无此问题。 / Briefly describe the bug. Test [Nightly](https://github.com/osfans/trime/releases/tag/nightly) for the bug first.
+      description: 简要描述遇到的问题。请说明你使用的版本（`git describe --tags --long` 或构建产物的版本号）。 / Briefly describe the bug, and include the version you built from.
     validations:
       required: true
 

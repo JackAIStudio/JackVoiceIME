@@ -5,9 +5,6 @@
 blank_issues_enabled: true
 
 contact_links:
-  - name: 提问与讨论 / Questions & Discussions
-    url: https://github.com/JackAIStudio/JackVoiceIME/issues
-    about: 使用上的疑问请在这里提 / Please ask usage questions here
   - name: 上游 Trime / Upstream Trime
     url: https://github.com/osfans/trime
     about: 本仓库是 Trime 的 fork，与 Rime/Trime 本身无关的问题请向上游反馈

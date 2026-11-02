@@ -31,13 +31,9 @@ Describe features of this pull request
 #### Code Review
 1. No wildcards import
 2. Manual build and test pass
-3. GitHub Action CI pass
-4. At least one contributor review and approve
-5. Merged clean without conflicts
-6. PR will be merged by rebase upstream base
-
-#### Daily build
-Login and download artifact at https://github.com/osfans/trime/actions
+3. At least one contributor review and approve
+4. Merged clean without conflicts
+5. PR will be merged by rebase upstream base
 
 #### Additional Info
 
