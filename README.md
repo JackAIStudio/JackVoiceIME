@@ -1,176 +1,145 @@
 <!--
-SPDX-FileCopyrightText: 2015 - 2024 Rime community
+SPDX-FileCopyrightText: 2026 Jack
 
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 
-> ## 📍 这是什么
->
-> **JackVoice 的手机端形态。** 自带键盘 + 语音输入，装上它就能说话上屏，
-> 不需要再装别的。
->
-> 本仓库是 [Trime](https://github.com/osfans/trime) 的 fork，
-> 相对上游有若干自有提交（语音链路、JackVoice 界面、词库同步）。
-> 日常改动提交到 `main`。
->
-> 下面保留的是上游 Trime 的原始 README。
+<div align="center">
+
+# JackVoice
+
+**说话即成文。**
+
+安卓语音输入法：点进任何输入框，按住说话，文字自己落进去。
+
+[![License: GPL v3](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+[![Platform](https://img.shields.io/badge/Android-7.0%2B-3DDC84?logo=android&logoColor=white)](#)
+[![Kotlin](https://img.shields.io/badge/Kotlin-2.x-7F52FF?logo=kotlin&logoColor=white)](#)
+
+[功能](#功能) · [界面](#界面) · [构建](#从源码构建) · [技术设计](JACKVOICE.md)
+
+</div>
 
 ---
 
-# Trime
+## 这是什么
 
-Rime IME for Android
+JackVoice 是一个**语音优先的安卓输入法**。它把「语音面板」做成了主键盘——点开任何输入框，
+先看到的不是字母键，而是一颗「点击说话」。
 
-[![License: GPL v3](https://img.shields.io/badge/License-GPL%20v3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
+说完，文字直接进当前输入框。不用复制，不用粘贴，不用切到别的 App。
 
-English | [简体中文](README_sc.md) | [繁體中文](README_tc.md)
+> 对标 [Typeless](https://www.typeless.com/) 的交互形态，键盘部分基于
+> [同文输入法 Trime](https://github.com/osfans/trime)（RIME 引擎，GPL-3.0）改造。
 
-## About
+## 功能
 
-Trime is originally a frontend of open-source [Android Traditional Chinese IME], based on [RIME] input method framework and written in Java/Kotlin with JNI. It is designed to protect the native language of various local dialects of Chinese and is a universal shape-based and phonetic-based input method platform.
+### 语音
 
-[Documentation](https://github.com/osfans/trime/wiki)
+| | |
+|---|---|
+| **点一下就说** | 语音面板就是主键盘，不需要先切模式 |
+| **实时预览** | 说话过程中文字实时出现在面板上，终稿到了才上屏 |
+| **云端 / 本地双引擎** | 面板左上角一键切换。本地引擎基于 sherpa-onnx，**不联网也能出字**，不需要 API Key |
+| **录音永不丢** | 录音一开始就写盘。识别失败、断网、进程被杀，音频都还在，随时重新转写 |
+| **识别会断，录音不会** | 网络断了只停识别，麦克风继续录——地铁进隧道不会让你白说一段 |
+| **热词与替换词** | 内置词表 + 自定义，专有名词、产品名、人名识别更准 |
+| **标点档位** | 全标点 / 去句号 / 无标点，一键切换，数字、时间、网址里的符号不动 |
+| **按住别人的声音** | 说话时自动压住正在播放的音乐和直播，说完恢复 |
 
-## Build
+### 键盘
 
-No prebuilt packages are published, and this repository does not use GitHub Actions.
-Build it yourself:
+| | |
+|---|---|
+| **中文 / 英文** | 顶栏胶囊 `[🎙 \| 拼 \| EN]` 一键切换，模块会记住上次停在哪 |
+| **空格长按 = 触控板** | 按住空格滑动移动光标、选中文字，轻点仍然打空格 |
+| **表情搜索** | 内置完整 emoji 索引，输入拼音就能找表情，支持肤色变体 |
+| **极简布局** | 重写过的四排键盘，语音底栏与打字键盘共用同一套网格，切换时高度不变 |
+
+### 主界面
+
+四个 Tab：**首页**（听写统计）/ **历史记录**（含音频回放与重新转写）/
+**词典**（热词、替换词）/ **设置**。
+
+## 界面
+
+<!-- 视频发布后把截图放这里 -->
+> 📷 截图待补充
+
+## 从源码构建
+
+本项目**不提供预编译安装包**，需要自行构建。原因很简单：这是一个需要麦克风和输入法权限的
+个人工具，代码开源给你，包你自己出，中间没有任何分发环节。
+
+### 环境要求
+
+| 依赖 | 版本 |
+|---|---|
+| JDK | 21 |
+| Android SDK | API 37 |
+| Android NDK | 28.0.13004108 |
+| CMake | 3.31.6 |
+
+### 步骤
 
 ```sh
+# submodule 是必须的：librime / OpenCC / snappy / lua 都在里面
 git clone --recursive https://github.com/JackAIStudio/JackVoiceIME.git
 cd JackVoiceIME
-./gradlew assembleDebug            # output: app/build/outputs/apk/debug/
+
+./gradlew assembleDebug
+# 产物：app/build/outputs/apk/debug/
 ```
 
-Requires JDK 21, Android SDK and NDK 28. librime / OpenCC / snappy are submodules,
-so the `--recursive` flag is required.
+> **Windows 用户**：构建过程会创建符号链接，需要开启
+> [开发者模式](https://learn.microsoft.com/en-us/windows/apps/get-started/enable-your-device-for-development)，
+> 并执行 `git config --global core.symlinks true`。不开启也能构建，失败时会自动回退到复制。
 
-Note that a plain build still carries the upstream Trime configuration. What this fork
-changes on top of upstream is documented in [JACKVOICE.md](JACKVOICE.md).
-
-## History
-
-TRIME is the abbreviation of _Tongwen RIME_ or _ThaeRv Input Method_.
-
-From the beginning, TRIME was written for TaeRv Pinyin, and named _TaeRv Input Method (泰如输入法)_.
-
-Then, we created an input method platform with some code tables, such as Wu dialect (吴语). We renamed it to _Chinese Character Dialect Input Method (汉字方言输入法)_.
-
-Later, it supports Wubi and Liangbi and other shape-based input method, we branded it [_Tongwen Input Method Platform 2.0 (同文输入法平台 2.0)_](https://github.com/osfans/trime-legacy), which implies that the phonetic-based and shape-based input method on one platform, while dialects and Mandrain share one kind of characters.
-
-Benefit from the [librime](https://github.com/rime/librime) project by JNI, we are now in version 3.0 of TRIME aka _Tongwen Input Method (同文输入法)_.
-
-Your are now welcome to [contribution](CONTRIBUTING.md) ~ !
-
-## Getting Started for developer
-
-### Prepare
-
-#### Requirements:
-
-- Android SDK and Android NDK
-  * If you are new to Android development, please install [Android Studio](https://developer.android.com/studio).
-
-- JDK (OpenJDK) 17
-- Python 3 (required by OpenCC to generate dictionary text files)
-
-#### Prerequisites for Windows
-
-Symbolic links will be created according to current build configurations, developers need:
-
-- Enable [Developer Mode](https://learn.microsoft.com/en-us/windows/apps/get-started/enable-your-device-for-development) so that symlinks can be created without administrator privilege.
-
-- Enable symlink support for `git`:
-
-  ```powershell
-  git config --global core.symlinks true
-  ```
-
-If you cannot or wouldn't like to enable anything, it doesn't matter. Copying will be used instead when error on creating symbolic links.
-
-### Build
-
-#### 1. Clone this project and fetch all submodules:
+### 安装到手机
 
 ```sh
-git clone --recursive git@github.com:JackAIStudio/JackVoiceIME.git
-git submodule update --init --recursive
-# use partial clone to save time
-git submodule update --init --recursive --filter=blob:none
+adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-#### 2. Debug version without signature:
+装好后在 **系统设置 → 语言和输入法 → 当前输入法** 里选中 JackVoice，
+并按提示授予麦克风权限。
 
-```sh
-# On Linux or macOS
-make debug
+> ⚠️ **麦克风权限必须走系统弹窗授权**。用 `adb grant RECORD_AUDIO` 表面上是 granted，
+> 但 AppOps 里仍是 ignore，录音会被系统直接拒掉。原因见
+> [技术设计 · 录音放行看的是 AppOps](JACKVOICE.md#两个必须知道的坑)。
 
-# On Windows
-.\gradlew assembleDebug
-```
+## 语音引擎
 
-#### 3. Release version with signture:
+| | 云端 | 本地 |
+|---|---|---|
+| 引擎 | 豆包流式识别 | sherpa-onnx + X-ASR |
+| 联网 | 需要 | **不需要** |
+| API Key | 需要 | 不需要 |
+| 模型 | — | 首次使用时下载，约 128MB |
+| 延迟 | 取决于网络 | 停止后约 150–250ms |
+| 热词 | 支持 | 不支持 |
 
-Create `keystore.properties` file which contains following contents for [signing information](https://developer.android.com/studio/publish/app-signing.html):
+引擎在**开始录音时定下**，中途不切，避免同一个会话里两套结果打架。
 
-```gradle.properties
-storePassword=myStorePassword
-keyPassword=mykeyPassword
-keyAlias=myKeyAlias
-storeFile=myStoreFileLocation
-```
+## 隐私
 
-Then, you may run:
+- 录音**只存在这台手机上**（应用私有目录），不上传
+- 云端识别时音频会发送到你配置的识别服务，这是云端引擎的固有代价
+- 本地引擎完全离线，音频不出设备
+- 没有统计、没有埋点、没有第三方 SDK
 
-```sh
-# On Linux or macOS
-make release
+## 项目状态
 
-# On Windows
-.\gradlew assembleRelease
-```
+个人项目，按自己的使用习惯迭代。欢迎 Issue，但不保证响应速度。
 
-### Troubleshooting
+上游 Trime 的原始 README 保留在 [README_upstream.md](README_upstream.md)。
 
-```
-Target "boost_log_setup" links to target "Boost::coroutine" but the target was not found.
-```
+## 致谢
 
-Run `make clean` on Linux or macOS, or run `.\gradlew clean` on Windows.
+- [同文输入法 Trime](https://github.com/osfans/trime) 与 [RIME](https://rime.im/) 社区——键盘与输入法框架的基础
+- [librime](https://github.com/rime/librime)、[OpenCC](https://github.com/BYVoid/OpenCC)、[sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)
+- 以及 [AUTHORS](AUTHORS) 中列出的所有 Trime 贡献者
 
-Other issues:
+## 许可证
 
-1. Try `make clean`
-2. Make sure your repo is up-to-date. If one or more submodules are modified, also make sure they are compatible with the current version.
-3. If the problem still exists(very unlikely), try to make a new clone.
-4. Check if this is there is an issue/PR related to your problem. If yes, try their solutions.
-5. If none of them works, you may make an issue to ask for help.(optional)
-
-## Acknowledgments
-
-- Developer: [osfans](https://github.com/osfans)
-- Contributors: [boboIqiqi](https://github.com/boboIqiqi)、[Bambooin](https://github.com/Bambooin)、[senchi96](https://github.com/senchi96)、[heiher](https://github.com/heiher)、[abay](https://github.com/a342191555)、[iovxw](https://github.com/iovxw)、[huyz-git](https://github.com/huyz-git)、[tumuyan](https://github.com/tumuyan)、[WhiredPlanck](https://github.com/WhiredPlanck)、[nopdan](https://github.com/nopdan)...
-- [Wiki Editors](https://github.com/osfans/trime/wiki): [xiaoqun2016](https://github.com/xiaoqun2016)、[boboIqiqi](https://github.com/boboIqiqi)...
-- Translators: 天真可爱的满满 (Chinese Traditional), 点解 (English) ...
-- Keyboard Designers: 天真可爱的满满、皛筱晓小笨鱼、吴琛 11、熊猫阿 Bo、默默ㄇㄛ ˋ...
-- Community: Netizens who feedback in [Issues](https://github.com/osfans/trime/issues)、[QQ Group (811142286)](https://jq.qq.com/?_wv=1027&k=AXdR80HN)、[QQ Group (224230445)](http://qm.qq.com/cgi-bin/qm/qr?_wv=1027&k=pg_q7UVumWYLq1Rk8kIAqkK1xGt64VnX&authKey=04m9l7OBO5H5vgrEL8IbpsmtnptWM60xy%2FUwYCfyvw9VcRhe8zRzAS1ezoemZdFr&noverify=0&group_code=224230445)、[Tieba](http://tieba.baidu.com/f?kw=rime)、[Google Play](https://play.google.com/store/apps/details?id=com.osfans.trime)、[Telegram](https://t.me/trime_dev)...
-- Projects: [RIME]、[OpenCC]、[Android Traditional Chinese IME] and so on.
-
-## Third Party Libraries
-
-- [Boost C++ Libraries](https://www.boost.org/) (Boost Software License)
-- [darts-clone](https://github.com/s-yata/darts-clone) (New BSD License)
-- [LevelDB](https://github.com/google/leveldb) (New BSD License)
-- [libiconv](https://www.gnu.org/software/libiconv/) (LGPL License)
-- [marisa-trie](https://github.com/s-yata/marisa-trie) (BSD License)
-- [glog](https://github.com/google/glog) (New BSD License)
-- [OpenCC](https://github.com/BYVoid/OpenCC) (Apache License 2.0)
-- [RIME](https://rime.im) (BSD License)
-- [snappy](https://github.com/google/snappy)(BSD License)
-- [utfcpp](https://github.com/nemtrif/utfcpp) (Boost Software License)
-- [yaml-cpp](https://github.com/jbeder/yaml-cpp) (MIT License)
-- [Android Traditional Chinese IME](https://code.google.com/p/android-traditional-chinese-ime/) (Apache License 2.0)
-
-[Android Traditional Chinese IME]: https://code.google.com/p/android-traditional-chinese-ime/
-[RIME]: http://rime.im
-[OpenCC]: https://github.com/BYVoid/OpenCC
+[GPL-3.0-or-later](LICENSE)。作为 Trime 的衍生作品，本项目的分发同样遵循 GPL-3.0。
